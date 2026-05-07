@@ -40,6 +40,10 @@ def fetch(ticker, start, end, interval='1d'):
             progress=False,
             auto_adjust=True
         )
+        # yfinance 1.x returns MultiIndex columns even for single tickers —
+        # flatten to simple column names so the rest of the code works unchanged
+        if not df.empty and isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         # Keep only trading days within the window
         if not df.empty:
             df = df[df.index.date >= start.date()]
@@ -92,6 +96,8 @@ def get_52w(ticker):
                          progress=False, auto_adjust=True)
         if df.empty:
             return None, None
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         return float(df['Low'].min()), float(df['High'].max())
     except Exception:
         return None, None
@@ -157,10 +163,10 @@ def get_weekly_data():
         'eurusd': 'EURUSD=X',
         'gbpusd': 'GBPUSD=X',
         'usdjpy': 'USDJPY=X',
-        'usdcnh': 'USDCNH=X',
+        'usdcnh': 'CNH=X',         # USDCNH=X delisted — CNH=X is the active symbol
         'dxy':    'DX-Y.NYB',
         'us10y':  '^TNX',
-        'in10y':  '^IN10YT=RR',
+        'in10y':  'GIND10YR=X',    # ^IN10YT=RR 404'd — GIND10YR=X is current
         'brent':  'BZ=F',
         'gold':   'GC=F',
     }
@@ -272,7 +278,7 @@ def get_weekly_data():
     in_close  = safe_close(cur['in10y'])
     in_prior  = safe_close(prv['in10y'])
     us_lo52, us_hi52 = get_52w('^TNX')
-    in_lo52, in_hi52 = get_52w('^IN10YT=RR')
+    in_lo52, in_hi52 = get_52w('GIND10YR=X')
 
     data['us10y_close']   = round(us_close, 2) if us_close else 'N/A'
     data['us10y_wow']     = fmt_chg(bps_change(us_close, us_prior), unit='bps') if us_close else 'N/A'
@@ -373,10 +379,10 @@ def get_daily_data():
         'eurusd': 'EURUSD=X',
         'gbpusd': 'GBPUSD=X',
         'usdjpy': 'USDJPY=X',
-        'usdcnh': 'USDCNH=X',
+        'usdcnh': 'CNH=X',
         'dxy':    'DX-Y.NYB',
         'us10y':  '^TNX',
-        'in10y':  '^IN10YT=RR',
+        'in10y':  'GIND10YR=X',
         'brent':  'BZ=F',
         'gold':   'GC=F',
     }
