@@ -173,7 +173,8 @@ def render_snapshot_tab():
                     api_key,
                     data.get("week_start", ""),
                     data.get("week_end", ""),
-                    data.get("week_num", "")
+                    data.get("week_num", ""),
+                    data=data  # verified market data prevents hallucinated price levels
                 )
             else:
                 stories, s_err = get_daily_stories(api_key, data.get("date", ""))

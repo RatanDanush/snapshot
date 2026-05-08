@@ -178,20 +178,20 @@ geopolitical developments) that explain these price moves. Use only the numbers 
 Return ONLY a valid JSON object, no markdown fences, no explanation:
 {{
   "theme": "Week in one line: 1–2 sentences on 2–3 biggest events with key numbers. End with INR takeaway.",
-  "mood_tag": "2–4 ALL CAPS keywords separated by · e.g. FOMC HOLD · OIL RALLY · INR PRESSURE",
-  "usdinr_sub": "1–2 lines: intraweek peak and the event that drove it",
-  "dxy_sub": "1–2 lines: DXY driver and INR relevance",
-  "eurinr_sub": "1 line: EUR/INR — EUR or INR story?",
-  "gbpinr_sub": "1 line: GBP/INR driver",
-  "jpyinr_sub": "1 line: JPY/INR driver",
-  "cnhinr_sub": "1 line: CNH/INR driver",
-  "us10y_sub": "1–2 lines: US yield driver this week",
-  "in10y_sub": "1–2 lines: India yield driver and fiscal context",
-  "fed_sub": "1 line: Fed meeting, statement or signal this week",
-  "rbi_sub": "1 line: RBI action or guidance this week",
-  "brent_sub": "1–2 lines: oil driver and India CAD/INR impact",
-  "gold_sub": "1 line: gold driver",
-  "inr_insight": "2–3 sentences: USD-driven or broad G3 weakness? India-specific pressures? What to watch next week.",
+  "mood_tag": "EXACTLY 2–3 ALL CAPS keywords separated by · Max 3 terms. e.g. FOMC SPLIT · OIL SHOCK · INR PRESSURE",
+  "usdinr_sub": "MAX 12 WORDS. Terse. Use · separators. e.g. 'Week hi: 95.28 Wed post-FOMC · Mon open: 94.52'",
+  "dxy_sub": "MAX 12 WORDS. e.g. 'GDP miss + oil pullback drove Fri reversal · key vs INR'",
+  "eurinr_sub": "MAX 10 WORDS. e.g. 'EUR recovered Fri on GDP miss · INR driver'",
+  "gbpinr_sub": "MAX 10 WORDS. Terse. e.g. 'BoE hawkish hold · sterling outperformed all week'",
+  "jpyinr_sub": "MAX 10 WORDS. e.g. 'BoJ held 0.75% · safe-haven JPY demand Fri'",
+  "cnhinr_sub": "MAX 10 WORDS. e.g. 'CNH stable on PBOC guidance · INR weakness drove move'",
+  "us10y_sub": "MAX 12 WORDS. Terse. e.g. 'FOMC hawkish dissents + PCE 4.3% drove surge · partial Fri pullback'",
+  "in10y_sub": "MAX 12 WORDS. e.g. 'Oil shock → fiscal concern · FPI demand weak · mkt closed Thu'",
+  "fed_sub": "MAX 10 WORDS starting with ■. e.g. '■ On hold · hawkish dissents · hike odds rose 0→9%'",
+  "rbi_sub": "MAX 10 WORDS starting with ■. e.g. '■ On hold · neutral stance · next MPC June'",
+  "brent_sub": "MAX 12 WORDS. e.g. 'Iran Hormuz at 4% flows (Goldman) · wk hi $126 intraday'",
+  "gold_sub": "MAX 8 WORDS. e.g. 'Geopolitical safe-haven + USD weakness · near record'",
+  "inr_insight": "2–3 sentences max. Must say whether weakness is USD-driven or broad G3. Name 1-2 India-specific factors. End with 'Watch: [specific trigger] next week.'",
   "chart_callout": "6–9 words: single most important INR chart observation",
   "chart_events": [{{"label":"SHORT NAME","x_idx":1}},{{"label":"SHORT NAME","x_idx":2}}]
 }}
@@ -231,7 +231,7 @@ Return ONLY valid JSON, no fences:
 
 # ── Weekly stories ────────────────────────────────────────────────────────────
 
-def get_weekly_stories(api_key, week_start, week_end, week_num):
+def get_weekly_stories(api_key, week_start, week_end, week_num, data=None):
     """Two-step: search+summarise → structure into 3 story cards.
     Returns (list, error_or_None)."""
 
@@ -257,8 +257,21 @@ central bank actions, and market reactions for each event."""
     if not prose:
         return fallback_stories(3, reason=err or 'No prose from Step A'), err
 
-    struct = f"""You are a senior FX analyst at Standard Chartered.
+    # Build verified data constraints so AI doesn't hallucinate price levels
+    verified = ""
+    if data:
+        verified = f"""
+VERIFIED MARKET DATA (do NOT use different price levels in any story):
+- USD/INR: {data.get('usdinr_close','N/A')} (week range {data.get('usdinr_wk_low','N/A')}–{data.get('usdinr_wk_high','N/A')})
+- DXY: {data.get('dxy_close','N/A')}
+- EUR/INR: {data.get('eurinr_close','N/A')}  GBP/INR: {data.get('gbpinr_close','N/A')}
+- US 10Y: {data.get('us10y_close','N/A')}%  India 10Y: {data.get('in10y_close','N/A')}%
+- Brent: ${data.get('brent_close','N/A')}  Gold INR: {data.get('gold_inr','N/A')}
+- Fed Funds: {data.get('fed_rate','N/A')}  RBI Repo: {data.get('rbi_rate','N/A')}
+Any USD/INR values in stories must be in the range shown above, not from a different year."""
 
+    struct = f"""You are a senior FX analyst at Standard Chartered.
+{verified}
 Summary of macro events from {week_start}–{week_end}:
 
 {{{{PROSE}}}}
@@ -283,6 +296,14 @@ All 3 must be distinct events."""
     if struct_err:
         return fallback_stories(3, reason=struct_err), struct_err
     if isinstance(result, list) and result:
+        # Sanitise placeholder URLs
+        import urllib.parse
+        for story in result:
+            for link in story.get('links', []):
+                url = link.get('url', '')
+                if not url or 'source.com' in url or url == '#':
+                    q = urllib.parse.quote(f"{story.get('headline', '')} {week_start}")
+                    link['url'] = f"https://news.google.com/search?q={q}"
         return result[:3], None
     return fallback_stories(3, reason='Structure returned empty'), 'Structure returned empty'
 
@@ -317,6 +338,12 @@ impact=HIGH for central bank meetings and major surprises. impact=MED for routin
 
     result, err2 = _step_b(api_key, prose, struct)
     if isinstance(result, list):
+        import urllib.parse
+        for evt in result:
+            url = evt.get('url', '')
+            if not url or 'source.com' in url or url == '#':
+                q = urllib.parse.quote(evt.get('event', 'macro event week ahead'))
+                evt['url'] = f"https://news.google.com/search?q={q}"
         return result[:6], err2
     return [], err2
 

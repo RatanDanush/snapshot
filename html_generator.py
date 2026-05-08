@@ -140,9 +140,9 @@ def build_inr_perf_chart(inr_vs_usd, inr_vs_eur, inr_vs_gbp, day_labels,
     {dots_eur}
     <polyline points="{pts_gbp}" fill="none" stroke="#2e7d32" stroke-width="2" stroke-dasharray="2,3"/>
     {dots_gbp}
-    {svg_val_label(last_usd, 510, vmin, vmax, YB, YT, "#c0392b")}
-    {svg_val_label(last_eur, 510, vmin, vmax, YB, YT, "#1a5fa8", dy=-16)}
-    {svg_val_label(last_gbp, 510, vmin, vmax, YB, YT, "#2e7d32", dy=6)}
+    {svg_val_label(last_usd, 510, vmin, vmax, YB, YT, "#c0392b", dy=-7)}
+    {svg_val_label(last_eur, 510, vmin, vmax, YB, YT, "#1a5fa8", dy=-22)}
+    {svg_val_label(last_gbp, 510, vmin, vmax, YB, YT, "#2e7d32", dy=10)}
     <rect x="52" y="6" width="8" height="3" fill="#c0392b"/>
     <text x="63" y="10.5" font-family="Arial" font-size="8" fill="#444">vs USD</text>
     <line x1="100" y1="8" x2="108" y2="8" stroke="#1a5fa8" stroke-width="2" stroke-dasharray="4,2"/>
@@ -371,9 +371,14 @@ def generate_weekly_html(data, stories, week_ahead_events, commentary=None):
     eurinr_sub = ai('eurinr_sub', '')
     gbpinr_sub = ai('gbpinr_sub', '')
     jpyinr_sub = ai('jpyinr_sub', '')
-    cnhinr_sub = ai('cnhinr_sub', '')
+    cnhinr_sub = ai('cnhinr_sub',
+        'N/A — CNH=X delisted on Yahoo Finance; use Bloomberg USDCNH for live data'
+        if d.get('cnhinr_close') == 'N/A' else '')
     us10y_sub  = ai('us10y_sub', '')
-    in10y_sub  = ai('in10y_sub', f'India–US spread: {d.get("yield_spread","N/A")}')
+    _in10y_na = d.get('in10y_close') == 'N/A'
+    in10y_sub  = ai('in10y_sub',
+        'N/A — GIND10YR=X unavailable; check CCIL/NDS-OM for live 10Y G-Sec data'
+        if _in10y_na else f'India–US spread: {d.get("yield_spread","N/A")}')
     fed_sub    = ai('fed_sub', '■ On hold')
     rbi_sub    = ai('rbi_sub', '■ On hold · Neutral stance')
     brent_sub  = ai('brent_sub', f'Week high: ${d.get("brent_wk_high","N/A")}')
@@ -441,7 +446,7 @@ def generate_weekly_html(data, stories, week_ahead_events, commentary=None):
   </div>
 </div>
 
-<div class="insight">{inr_insight}</div>
+<div class="insight"><strong>Key read:</strong> {inr_insight}</div>
 
 <div class="chart-wrap" style="border-top:1px solid #eef0f3;">
   <div class="chart-title">INR weekly performance — % change from Mon open (↓ = INR weaker)</div>
@@ -533,13 +538,15 @@ def generate_weekly_html(data, stories, week_ahead_events, commentary=None):
   <div class="card">
     <div class="lbl">Fed Funds Rate</div>
     <div class="val" style="font-size:17px;">{d.get("fed_rate","N/A")}</div>
-    <div class="chg grey">{fed_sub}</div>
+    <div class="chg grey">■ On hold</div>
+    <div class="sub">{fed_sub}</div>
     <div class="src-line"><a href="https://www.federalreserve.gov/monetarypolicy/openmarket.htm" target="_blank">Fed Reserve</a></div>
   </div>
   <div class="card">
     <div class="lbl">RBI Repo Rate</div>
     <div class="val" style="font-size:17px;">{d.get("rbi_rate","N/A")}</div>
-    <div class="chg grey">{rbi_sub}</div>
+    <div class="chg grey">■ On hold · Neutral stance</div>
+    <div class="sub">{rbi_sub}</div>
     <div class="src-line"><a href="https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx" target="_blank">RBI MPC statement</a></div>
   </div>
 </div>

@@ -88,6 +88,49 @@ def safe_high(df):
         return float(df['High'].max()) if not df.empty else None
     except Exception:
         return None
+def fetch_multi(tickers, start, end, interval='1d'):
+    """Try multiple tickers in order, return first non-empty DataFrame."""
+    if isinstance(tickers, str):
+        tickers = [tickers]
+    for ticker in tickers:
+        df = fetch(ticker, start, end, interval)
+        if not df.empty:
+            return df
+    return pd.DataFrame()
+
+def fetch_india_10y(start, end):
+    """
+    Fetch India 10Y G-Sec yield.
+    Uses yf.Ticker().history() which handles timezone quirks better than yf.download().
+    Falls back to yf.download() with GIND10YR=X.
+    """
+    for ticker in ['GIND10YR=X', '^INBMK']:
+        try:
+            t = yf.Ticker(ticker)
+            df = t.history(
+                start=start.strftime('%Y-%m-%d'),
+                end=(end + timedelta(days=2)).strftime('%Y-%m-%d'),
+                auto_adjust=True
+            )
+            if not df.empty:
+                # Strip timezone so .date() comparisons work
+                try:
+                    df.index = df.index.tz_localize(None)
+                except Exception:
+                    try:
+                        df.index = df.index.tz_convert(None)
+                    except Exception:
+                        pass
+                df = df[df.index.date >= start.date()]
+                df = df[df.index.date <= end.date()]
+                if not df.empty:
+                    return df
+        except Exception:
+            pass
+    # Final fallback — standard download
+    return fetch('GIND10YR=X', start, end, interval)
+
+
 
 def get_52w(ticker):
     """52-week low and high."""
@@ -163,7 +206,7 @@ def get_weekly_data():
         'eurusd': 'EURUSD=X',
         'gbpusd': 'GBPUSD=X',
         'usdjpy': 'USDJPY=X',
-        'usdcnh': 'CNH=X',         # USDCNH=X delisted — CNH=X is the active symbol
+        'usdcnh': ['USDCNH=X', 'CNY=X'],  # try offshore then onshore proxy
         'dxy':    'DX-Y.NYB',
         'us10y':  '^TNX',
         'in10y':  'GIND10YR=X',    # ^IN10YT=RR 404'd — GIND10YR=X is current
@@ -171,8 +214,13 @@ def get_weekly_data():
         'gold':   'GC=F',
     }
 
-    cur = {k: fetch(v, mon, fri) for k, v in tickers.items()}
-    prv = {k: fetch(v, p_mon, p_fri) for k, v in tickers.items()}
+    cur = {k: (fetch_multi(v, mon, fri) if isinstance(v, list) else fetch(v, mon, fri))
+            for k, v in tickers.items()}
+    prv = {k: (fetch_multi(v, p_mon, p_fri) if isinstance(v, list) else fetch(v, p_mon, p_fri))
+            for k, v in tickers.items()}
+    # India 10Y needs special handling for timezone issues
+    cur['in10y'] = fetch_india_10y(mon, fri)
+    prv['in10y'] = fetch_india_10y(p_mon, p_fri)
 
     # ── USD/INR ──
     u_close = safe_close(cur['usdinr'])
@@ -223,9 +271,17 @@ def get_weekly_data():
         ('eurinr', eur_inr, eur_inr_p, 'EURINR=X'),
         ('gbpinr', gbp_inr, gbp_inr_p, 'GBPINR=X'),
         ('jpyinr', jpy_inr, jpy_inr_p, None),
-        ('cnhinr', cnh_inr, cnh_inr_p, None),
+        ('cnhinr', cnh_inr, cnh_inr_p, ['USDCNH=X', 'CNY=X']),
     ]:
-        lo52, hi52 = get_52w(label) if label else (None, None)
+        if label and isinstance(label, list):
+            lo52, hi52 = None, None
+            for l in label:
+                lo52, hi52 = get_52w(l)
+                if lo52: break
+        elif label:
+            lo52, hi52 = get_52w(label)
+        else:
+            lo52, hi52 = None, None
         if lo52 and key == 'jpyinr':
             lo52 *= 100; hi52 *= 100
         data[f'{key}_close']   = val if val else 'N/A'
@@ -308,7 +364,7 @@ def get_weekly_data():
     b_prior  = safe_close(prv['brent'])
     b_5d     = safe_series(cur['brent'])
     data['brent_close']    = round(b_close, 2) if b_close else 'N/A'
-    data['brent_wow']      = fmt_chg(pct_change(b_close, b_prior), invert=True) if b_close else 'N/A'
+    data['brent_wow']      = fmt_chg(pct_change(b_close, b_prior), invert=False) if b_close else 'N/A'
     data['brent_wow_val']  = pct_change(b_close, b_prior) if b_close else 0
     data['brent_wk_high']  = round(safe_high(cur['brent']), 2) if safe_high(cur['brent']) else b_close
     data['brent_5d']       = [round(v, 2) if v else None for v in b_5d]
@@ -321,7 +377,7 @@ def get_weekly_data():
         gold_inr = go_close * u_close / 3.11      # USD/oz → INR/10g
         gold_inr_p = (go_prior * u_prior / 3.11) if go_prior and u_prior else None
         data['gold_inr']     = f"~₹{round(gold_inr / 1000) * 1000:,.0f}"
-        data['gold_wow']     = fmt_chg(pct_change(gold_inr, gold_inr_p), invert=True) if gold_inr_p else 'N/A'
+        data['gold_wow']     = fmt_chg(pct_change(gold_inr, gold_inr_p), invert=False) if gold_inr_p else 'N/A'
         data['gold_wow_val'] = pct_change(gold_inr, gold_inr_p) if gold_inr_p else 0
     else:
         data['gold_inr']     = 'N/A'
@@ -379,7 +435,7 @@ def get_daily_data():
         'eurusd': 'EURUSD=X',
         'gbpusd': 'GBPUSD=X',
         'usdjpy': 'USDJPY=X',
-        'usdcnh': 'CNH=X',
+        'usdcnh': ['USDCNH=X', 'CNY=X'],
         'dxy':    'DX-Y.NYB',
         'us10y':  '^TNX',
         'in10y':  'GIND10YR=X',
@@ -388,7 +444,10 @@ def get_daily_data():
     }
 
     # For daily: fetch 3 days back to ensure we get today and yesterday
-    cur = {k: fetch(v, two_days_ago, today, interval='1d') for k, v in tickers.items()}
+    cur = {k: (fetch_multi(v, two_days_ago, today, interval='1d')
+               if isinstance(v, list) else fetch(v, two_days_ago, today, interval='1d'))
+            for k, v in tickers.items()}
+    cur['in10y'] = fetch_india_10y(two_days_ago, today)
 
     def today_close(df):
         return safe_close(df, -1)
@@ -453,7 +512,7 @@ def get_daily_data():
     b_now  = today_close(cur['brent'])
     b_prev = yesterday_close(cur['brent'])
     data['brent_close']   = round(b_now, 2) if b_now else 'N/A'
-    data['brent_chg']     = fmt_chg(pct_change(b_now, b_prev), invert=True) if b_now else 'N/A'
+    data['brent_chg']     = fmt_chg(pct_change(b_now, b_prev), invert=False) if b_now else 'N/A'
     data['brent_chg_val'] = pct_change(b_now, b_prev) if b_now else 0
 
     go_now  = today_close(cur['gold'])
@@ -462,7 +521,7 @@ def get_daily_data():
         gold_inr   = go_now  * u_now  / 3.11
         gold_inr_p = go_prev * u_prev / 3.11 if go_prev and u_prev else None
         data['gold_inr'] = f"~₹{round(gold_inr / 1000) * 1000:,.0f}"
-        data['gold_chg'] = fmt_chg(pct_change(gold_inr, gold_inr_p), invert=True)
+        data['gold_chg'] = fmt_chg(pct_change(gold_inr, gold_inr_p), invert=False)
     else:
         data['gold_inr'] = 'N/A'; data['gold_chg'] = 'N/A'
 
