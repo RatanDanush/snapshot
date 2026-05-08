@@ -1,56 +1,30 @@
-# macro_generator.py  v4
-# Root fix: auto-discover available Gemini models via list_models() so we
-# never hardcode a model name that doesn't exist on the installed SDK version.
+# macro_generator.py  v5
+# Key fix: _call_best() tries models in preference order at call time,
+# automatically skipping any that return 429 (quota=0) or 404 (not found).
+# gemini-2.5-flash is now first in the list.
+#
 # Two-step story pipeline:
-#   Step A — search+summarise (prose, grounding citations OK here)
+#   Step A — search+summarise (prose, grounding citations OK)
 #   Step B — structure prose → clean JSON (no search, reliable)
 
 import json, re, time
 import google.generativeai as genai
 
-# ── Model discovery ───────────────────────────────────────────────────────────
+# ── Model preference (newest first, most likely to have quota) ────────────────
 
-_model_cache = {}   # keyed by api_key
-
-def _discover_model(api_key):
-    """
-    Return the best available model name for the installed SDK + API key.
-    Calls list_models() once per session and caches the result.
-    """
-    if api_key in _model_cache:
-        return _model_cache[api_key]
-
-    genai.configure(api_key=api_key)
-    preference = [
-        'gemini-2.0-flash',
-        'gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'gemini-pro',
-        'gemini-1.0-pro',
-    ]
-    try:
-        available = [
-            m.name for m in genai.list_models()
-            if 'generateContent' in (m.supported_generation_methods or [])
-        ]
-        for pref in preference:
-            for name in available:
-                if pref in name:
-                    short = name.replace('models/', '').split('-00')[0]
-                    _model_cache[api_key] = short
-                    return short
-        if available:
-            short = available[0].replace('models/', '')
-            _model_cache[api_key] = short
-            return short
-    except Exception:
-        pass
-
-    _model_cache[api_key] = 'gemini-pro'
-    return 'gemini-pro'
-
+MODEL_PREFERENCE = [
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro',
+    'gemini-pro',
+    'gemini-1.0-pro',
+]
 
 def _search_tool():
+    """Return best available search grounding tool for the installed SDK."""
     try:
         from google.generativeai import protos
         return protos.Tool(google_search=protos.GoogleSearch())
@@ -63,109 +37,116 @@ def _search_tool():
         return None
 
 
-def _make_model(api_key, use_search=False):
-    """Returns (model, name, error_or_None)."""
+def _call_best(api_key, prompt, use_search=False):
+    """
+    Try each model in MODEL_PREFERENCE order.
+    Skips models that return 429 (quota exceeded / limit=0) or 404 (not found).
+    Stops on any other error (auth, invalid prompt, etc.).
+
+    Returns (text, model_name_used, elapsed_seconds, error_or_None).
+    """
     genai.configure(api_key=api_key)
-    best = _discover_model(api_key)
     tool  = _search_tool() if use_search else None
     tools = [tool] if tool else []
 
-    for candidate in [best, 'gemini-1.5-flash', 'gemini-pro']:
+    all_errors = []
+    for candidate in MODEL_PREFERENCE:
         try:
             m = genai.GenerativeModel(model_name=candidate, tools=tools)
-            return m, candidate, None
+            t0 = time.time()
+            r  = m.generate_content(prompt)
+            return r.text, candidate, round(time.time()-t0, 1), None
         except Exception as e:
-            last_err = str(e)
-    return None, None, last_err
+            err = str(e)
+            all_errors.append(f'[{candidate}] {err[:120]}')
+            # Only continue to next model for quota / availability errors
+            if any(x in err for x in ['429', '404', 'quota', 'limit: 0',
+                                       'not found', 'not supported', 'RESOURCE_EXHAUSTED']):
+                continue
+            # Auth errors, malformed prompt, etc. — stop immediately
+            break
 
-
-def _call(model, prompt):
-    """Returns (text, elapsed_s, error_or_None)."""
-    if model is None:
-        return None, 0, 'Model is None'
-    t0 = time.time()
-    try:
-        r = model.generate_content(prompt)
-        return r.text, round(time.time()-t0,1), None
-    except Exception as e:
-        return None, round(time.time()-t0,1), str(e)
+    return None, None, 0, '\n'.join(all_errors)
 
 
 # ── JSON extraction ───────────────────────────────────────────────────────────
 
 def extract_json(text):
     if not text: return None
-    text = re.sub(r'```json\s*','',text); text = re.sub(r'```\s*','',text)
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```\s*',     '', text)
     text = text.strip()
     try: return json.loads(text)
     except Exception: pass
-    for sc,ec in [('[',']'),('{','}')]:
-        s,e = text.find(sc), text.rfind(ec)
-        if s!=-1 and e!=-1:
+    for sc, ec in [('[', ']'), ('{', '}')]:
+        s, e = text.find(sc), text.rfind(ec)
+        if s != -1 and e != -1:
             try: return json.loads(text[s:e+1])
             except Exception: pass
     return None
 
 
-# ── Fallback ──────────────────────────────────────────────────────────────────
+# ── Fallback stories ──────────────────────────────────────────────────────────
 
 def fallback_stories(n=3, reason=''):
-    body = f'Gemini error: {reason}' if reason else 'Macro stories unavailable — add manually.'
-    return [{'tag':'Data Unavailable',
-             'headline':'Macro stories could not be fetched — add manually',
+    body = f'Gemini error: {reason}' if reason else \
+           'Macro stories unavailable — add manually before distributing.'
+    return [{'tag': 'Data Unavailable',
+             'headline': 'Macro stories could not be fetched — add manually',
              'body': body,
-             'inr_relevance':'📌 INR: Update this section with relevant macro context.',
-             'links':[], 'color':'blue'}] * n
+             'inr_relevance': '📌 INR: Update this section with relevant macro context.',
+             'links': [], 'color': 'blue'}] * n
 
 
 # ── Two-step helpers ──────────────────────────────────────────────────────────
 
 def _step_a(api_key, search_prompt, fallback_prompt):
-    """Search+summarise → prose. Returns (prose, source_desc, error_or_None)."""
-    model, name, err = _make_model(api_key, use_search=True)
-    if not err:
-        text, elapsed, call_err = _call(model, search_prompt)
-        if not call_err and text:
-            return text, f'{name}+search ({elapsed}s)', None
-        err = call_err or 'empty response'
-    search_err = err
+    """
+    Step A: search+summarise → raw prose.
+    Tries with search first; if quota/tool fails, retries without search.
+    Returns (prose, source_desc, error_or_None).
+    """
+    text, model, elapsed, err = _call_best(api_key, search_prompt, use_search=True)
+    if not err and text:
+        return text, f'{model}+search ({elapsed}s)', None
 
-    model2, name2, err2 = _make_model(api_key, use_search=False)
-    if err2:
-        return None, '', f'Search: {search_err} | Plain init: {err2}'
-    text2, elapsed2, call_err2 = _call(model2, fallback_prompt)
-    if call_err2:
-        return None, '', f'Search: {search_err} | Plain call: {call_err2}'
-    if text2:
-        return text2, f'{name2} no-search ({elapsed2}s)', None
-    return None, '', f'Search: {search_err} | Plain model returned empty'
+    search_err = err or 'empty response'
+
+    # Fallback: same model list without search grounding
+    text2, model2, elapsed2, err2 = _call_best(api_key, fallback_prompt, use_search=False)
+    if not err2 and text2:
+        return text2, f'{model2} no-search ({elapsed2}s)', f'Search failed: {search_err}'
+
+    return None, '', f'Search: {search_err} | Plain: {err2}'
 
 
 def _step_b(api_key, prose, template):
-    """Prose → JSON. Returns (parsed_obj, error_or_None)."""
-    model, name, err = _make_model(api_key, use_search=False)
+    """
+    Step B: prose → structured JSON via plain model call.
+    Returns (parsed_obj, error_or_None).
+    """
+    prompt = template.replace('{{PROSE}}', prose or 'No content available.')
+    text, model, elapsed, err = _call_best(api_key, prompt, use_search=False)
     if err:
-        return None, f'Step B model: {err}'
-    prompt = template.replace('{{PROSE}}', prose or 'No content.')
-    text, elapsed, call_err = _call(model, prompt)
-    if call_err:
-        return None, f'Step B ({elapsed}s): {call_err}'
+        return None, f'Step B ({elapsed}s): {err}'
     result = extract_json(text)
     if result is None:
         return None, f'Step B JSON parse failed. Output:\n{(text or "")[:400]}'
     return result, None
 
 
-# ── Commentary ────────────────────────────────────────────────────────────────
+# ── Commentary (single call, no search) ──────────────────────────────────────
 
 def generate_snapshot_commentary(api_key, data):
-    """Theme bar, mood tag, per-section narrative, INR insight, chart events.
+    """
+    Theme bar, mood tag, per-section narrative, INR insight, chart events.
     No search — uses market data + model training knowledge.
-    Returns (dict, error_or_None)."""
-    mode = data.get('mode','weekly')
+    Returns (dict, error_or_None).
+    """
+    mode = data.get('mode', 'weekly')
     def v(k):
-        val = data.get(k,0)
-        return val if isinstance(val,(int,float)) else 0
+        val = data.get(k, 0)
+        return val if isinstance(val, (int, float)) else 0
 
     if mode == 'weekly':
         ctx = (
@@ -194,11 +175,11 @@ Using your knowledge of global macro events during this specific week, write pro
 client-facing commentary. Name actual events (central bank meetings, data releases,
 geopolitical developments) that explain these price moves. Use only the numbers provided.
 
-Return ONLY a valid JSON object, no markdown fences:
+Return ONLY a valid JSON object, no markdown fences, no explanation:
 {{
   "theme": "Week in one line: 1–2 sentences on 2–3 biggest events with key numbers. End with INR takeaway.",
   "mood_tag": "2–4 ALL CAPS keywords separated by · e.g. FOMC HOLD · OIL RALLY · INR PRESSURE",
-  "usdinr_sub": "1–2 lines: intraweek peak/trough and event that drove it",
+  "usdinr_sub": "1–2 lines: intraweek peak and the event that drove it",
   "dxy_sub": "1–2 lines: DXY driver and INR relevance",
   "eurinr_sub": "1 line: EUR/INR — EUR or INR story?",
   "gbpinr_sub": "1 line: GBP/INR driver",
@@ -215,7 +196,7 @@ Return ONLY a valid JSON object, no markdown fences:
   "chart_events": [{{"label":"SHORT NAME","x_idx":1}},{{"label":"SHORT NAME","x_idx":2}}]
 }}
 
-chart_events: max 2 events for Mon–Fri INR chart annotation pins.
+chart_events: max 2 events for Mon–Fri INR chart annotation.
 x_idx: 0=Mon 1=Tue 2=Wed 3=Thu 4=Fri. Use [] if no single-day event stands out.
 Return ONLY valid JSON."""
 
@@ -239,12 +220,9 @@ Return ONLY valid JSON, no fences:
   "inr_insight":"2 sentences: broad USD or INR-specific? What to watch.",
   "chart_callout":"5–7 words: key observation"}}"""
 
-    model, name, init_err = _make_model(api_key, use_search=False)
-    if init_err:
-        return {}, f'Commentary model init: {init_err}'
-    text, elapsed, call_err = _call(model, prompt)
-    if call_err:
-        return {}, f'Commentary call ({elapsed}s): {call_err}'
+    text, model, elapsed, err = _call_best(api_key, prompt, use_search=False)
+    if err:
+        return {}, f'Commentary ({elapsed}s): {err}'
     result = extract_json(text)
     if result and isinstance(result, dict):
         return result, None
@@ -264,8 +242,8 @@ global FX markets, especially USD/INR and INR vs G3 (EUR, GBP, JPY, CNH).
 Focus on: central bank decisions (Fed, RBI, BoE, BoJ, ECB), major data surprises
 (GDP, CPI, PCE, jobs, PMI), geopolitical events affecting oil, major risk events.
 
-For EACH of the 3 events write a detailed paragraph with:
-- Exactly what happened and the specific date
+For EACH of the 3 events write a detailed paragraph covering:
+- What exactly happened and the specific date
 - Key numbers (rate levels, beats/misses, bps changes)
 - Immediate market reaction (FX, bonds, oil)
 - Direct impact on USD/INR or INR vs G3"""
@@ -304,7 +282,7 @@ All 3 must be distinct events."""
     result, struct_err = _step_b(api_key, prose, struct)
     if struct_err:
         return fallback_stories(3, reason=struct_err), struct_err
-    if isinstance(result, list) and len(result) > 0:
+    if isinstance(result, list) and result:
         return result[:3], None
     return fallback_stories(3, reason='Structure returned empty'), 'Structure returned empty'
 
@@ -335,7 +313,7 @@ Return ONLY a valid JSON array, no markdown fences:
 [{"date":"Day DD e.g. Mon 5","impact":"HIGH or MED",
   "event":"Event name and what to watch","url":"https://source.com"}]
 
-impact=HIGH for central bank meetings and major data surprises."""
+impact=HIGH for central bank meetings and major surprises. impact=MED for routine releases."""
 
     result, err2 = _step_b(api_key, prose, struct)
     if isinstance(result, list):
