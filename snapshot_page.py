@@ -1,15 +1,26 @@
-# snapshot_page.py
-# FX Snapshot tab — drop this file into your project root.
-# Called from app.py with a single function: render_snapshot_tab()
+# snapshot_page.py  v2
+# FX Snapshot Generator tab.
+# Called from app.py with: render_snapshot_tab()
+#
+# Pipeline (weekly):
+#   1. Fetch market data  (yfinance)
+#   2. Generate commentary  (Gemini, no search — fast)
+#   3. Generate macro stories  (Gemini + Google Search)
+#   4. Generate week-ahead  (Gemini + Google Search)
+#   5. Build HTML
+#
+# Pipeline (daily):
+#   1. Fetch market data
+#   2. Generate commentary
+#   3. Generate daily stories
+#   4. Build HTML
 
 import streamlit as st
 import streamlit.components.v1 as components
 from datetime import datetime
 
-# ── lazy imports so startup isn't slowed down ─────────────────────────────────
 
 def _get_api_key():
-    """Read Gemini key from secrets or session state."""
     try:
         return st.secrets["GEMINI_API_KEY"]
     except Exception:
@@ -17,9 +28,7 @@ def _get_api_key():
 
 
 def render_snapshot_tab():
-    """Render the full FX Snapshot Generator tab."""
 
-    # ── match existing dark theme ──────────────────────────────────────────────
     st.markdown("""
     <style>
     .snap-header{
@@ -29,14 +38,11 @@ def render_snapshot_tab():
     }
     .snap-title{font-size:13px;font-weight:700;color:#e8e8e8;letter-spacing:.08em;}
     .snap-sub{font-size:9px;color:#3a3a3a;letter-spacing:.05em;}
-    .snap-btn-row{display:flex;gap:10px;margin:12px 0;}
-    .snap-note{font-size:11px;color:#37474f;margin-top:6px;}
     .snap-warn{background:#0a0800;border:1px solid #3a2800;border-radius:3px;
                padding:6px 10px;font-size:10px;color:#c8a84b;margin-top:8px;}
     </style>
     """, unsafe_allow_html=True)
 
-    # ── Header bar (matches Bloomberg style of existing app) ──────────────────
     st.markdown("""
     <div class="snap-header">
       <div>
@@ -49,7 +55,7 @@ def render_snapshot_tab():
     </div>
     """, unsafe_allow_html=True)
 
-    # ── API key ────────────────────────────────────────────────────────────────
+    # ── API key ──────────────────────────────────────────────────────────────
     api_key = _get_api_key()
 
     if not api_key:
@@ -57,7 +63,7 @@ def render_snapshot_tab():
         with st.expander("🔑 Gemini API Key required", expanded=True):
             st.caption(
                 "Get a free key at [aistudio.google.com](https://aistudio.google.com). "
-                "Or add `GEMINI_API_KEY` to `.streamlit/secrets.toml` to skip this step permanently."
+                "Or add `GEMINI_API_KEY` to `.streamlit/secrets.toml`."
             )
             key_input = st.text_input(
                 "Paste Gemini API key",
@@ -77,7 +83,7 @@ def render_snapshot_tab():
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
-    # ── Generate buttons ───────────────────────────────────────────────────────
+    # ── Mode selector ────────────────────────────────────────────────────────
     st.markdown(
         '<div style="font-size:9px;font-weight:700;color:#3a3a3a;'
         'letter-spacing:.12em;padding-bottom:6px;border-bottom:1px solid #181818;'
@@ -91,42 +97,39 @@ def render_snapshot_tab():
             "📅 Weekly Snapshot",
             use_container_width=True,
             type="primary",
-            help="Mon–Fri of last completed week · 3 AI macro stories"
+            help="Mon–Fri of last completed week · AI commentary + 3 macro stories"
         )
     with col2:
         gen_daily = st.button(
             "🗓 Daily Snapshot",
             use_container_width=True,
-            help="Last 24h price action · 2 AI macro stories"
+            help="Last 24h price action · AI commentary + 2 macro stories"
         )
     with col3:
         st.markdown(
             '<div style="font-size:10px;color:#37474f;padding:8px 0;">'
-            'Weekly: Mon–Fri of the most recently completed week · '
+            'Weekly: Mon–Fri of most recently completed week · '
             'Daily: last completed trading session'
             '</div>',
             unsafe_allow_html=True
         )
 
-    # ── Data sources note ─────────────────────────────────────────────────────
-    # NOTE: never use `with st.sidebar:` inside a tab block — it corrupts
-    # Streamlit's rendering context and makes all subsequent tab content blank.
-    with st.expander("📋 Data sources", expanded=False):
+    with st.expander("📋 Data sources & pipeline", expanded=False):
         st.markdown("""
-| Data | Source |
+| Step | What happens |
 |---|---|
-| USD/INR, G3, DXY | Yahoo Finance |
-| US 10Y | Yahoo Finance |
-| India 10Y | Yahoo Finance |
-| Brent, Gold | Yahoo Finance |
-| Macro stories | Gemini + Google Search |
+| 1 · Market data | yfinance: USD/INR, G3, DXY, US/India 10Y, Brent, Gold |
+| 2 · Commentary | Gemini (no search) — theme bar, per-pair narrative, INR insight |
+| 3 · Macro stories | Gemini + Google Search — 3 sourced news stories |
+| 4 · Week ahead | Gemini + Google Search — upcoming high-impact events |
+| 5 · Build HTML | Combine all into email-ready snapshot |
         """)
         st.caption(
             "⚠ Fed Funds + RBI Repo are hardcoded — "
             "update manually in `data_fetcher.py` when rates change."
         )
 
-    # ── Generation logic ───────────────────────────────────────────────────────
+    # ── Generation logic ─────────────────────────────────────────────────────
     if gen_weekly or gen_daily:
 
         if not api_key:
@@ -135,31 +138,24 @@ def render_snapshot_tab():
 
         mode = "weekly" if gen_weekly else "daily"
 
-        # Import here so app startup is not slowed
         try:
             from data_fetcher import get_weekly_data, get_daily_data
-            from macro_generator import get_weekly_stories, get_week_ahead, get_daily_stories
+            from macro_generator import (
+                generate_snapshot_commentary,
+                get_weekly_stories, get_week_ahead, get_daily_stories
+            )
             from html_generator import generate_weekly_html, generate_daily_html
         except ImportError as e:
             st.error(
                 f"Missing module: {e}. "
-                "Make sure data_fetcher.py, macro_generator.py and html_generator.py "
-                "are in the same folder as app.py.",
+                "Make sure all .py files are in the same folder as app.py.",
                 icon="❌"
             )
             return
 
-        # Progress steps — styled dark to match dashboard
-        progress_html = lambda msg, done=False: st.markdown(
-            f'<div style="font-size:11px;color:{"#43a047" if done else "#546e7a"};'
-            f'font-family:monospace;padding:2px 0;">'
-            f'{"✓" if done else "·"} {msg}</div>',
-            unsafe_allow_html=True
-        )
-
         with st.status(f"Generating {mode} snapshot…", expanded=True) as status:
 
-            # Step 1: market data
+            # ── Step 1: Market data ──────────────────────────────────────────
             st.write("📡 Fetching market data from Yahoo Finance…")
             try:
                 data = get_weekly_data() if mode == "weekly" else get_daily_data()
@@ -169,8 +165,21 @@ def render_snapshot_tab():
                 st.error(f"Market data fetch failed: {e}")
                 return
 
-            # Step 2: macro stories
-            st.write("🤖 Generating macro stories via Gemini + Google Search…")
+            # ── Step 2: AI commentary (no search — fast) ─────────────────────
+            st.write("✍️ Generating per-section commentary (theme bar, pair narratives, INR insight)…")
+            commentary = {}
+            try:
+                commentary = generate_snapshot_commentary(api_key, data)
+                if commentary:
+                    st.write(f"✅ Commentary ready — theme bar + {len(commentary)} sections")
+                else:
+                    st.write("⚠️ Commentary unavailable — snapshot will use numeric fallbacks")
+            except Exception as e:
+                st.write(f"⚠️ Commentary skipped ({e}) — numeric fallbacks will be used")
+
+            # ── Step 3: Macro stories (with search) ──────────────────────────
+            st.write("🔍 Fetching macro stories via Gemini + Google Search…")
+            stories = []
             try:
                 if mode == "weekly":
                     stories = get_weekly_stories(
@@ -186,7 +195,7 @@ def render_snapshot_tab():
                 st.warning(f"Macro stories failed ({e}) — using placeholder.", icon="⚠️")
                 stories = []
 
-            # Step 3: week ahead (weekly only)
+            # ── Step 4: Week ahead (weekly only) ─────────────────────────────
             week_ahead = []
             if mode == "weekly":
                 st.write("📆 Finding week-ahead events…")
@@ -196,13 +205,13 @@ def render_snapshot_tab():
                 except Exception as e:
                     st.write(f"⚠️ Week-ahead skipped ({e})")
 
-            # Step 4: build HTML
+            # ── Step 5: Build HTML ────────────────────────────────────────────
             st.write("🏗 Building HTML snapshot…")
             try:
                 if mode == "weekly":
-                    html = generate_weekly_html(data, stories, week_ahead)
+                    html = generate_weekly_html(data, stories, week_ahead, commentary)
                 else:
-                    html = generate_daily_html(data, stories)
+                    html = generate_daily_html(data, stories, commentary)
                 st.write(f"✅ HTML ready · {len(html):,} chars")
             except Exception as e:
                 st.error(f"HTML generation failed: {e}")

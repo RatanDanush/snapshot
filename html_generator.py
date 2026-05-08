@@ -1,6 +1,7 @@
-# html_generator.py
-# Generates the complete HTML snapshot (weekly or daily) from data + stories.
-# Output matches the quality and structure of stanc_weekly_w18_v2.html
+# html_generator.py  v2
+# Generates the complete HTML snapshot (weekly or daily).
+# Accepts a `commentary` dict from macro_generator.generate_snapshot_commentary()
+# for AI-written per-section narrative. Falls back to programmatic values when absent.
 
 from datetime import datetime
 
@@ -12,13 +13,11 @@ def _clamp(y, top, bottom):
     return max(top + 1, min(bottom - 1, y))
 
 def _y(val, val_min, val_max, y_bottom, y_top):
-    """Map a data value to SVG y coordinate."""
     r = val_max - val_min if val_max != val_min else 0.001
     return _clamp(y_bottom - ((val - val_min) / r) * (y_bottom - y_top),
                   y_top, y_bottom)
 
 def svg_line_points(values, x_pos, val_min, val_max, y_bottom, y_top):
-    """Return SVG polyline points string, forward-filling None values."""
     last = next((v for v in values if v is not None), (val_min + val_max) / 2)
     pts = []
     for x, v in zip(x_pos, values):
@@ -29,7 +28,6 @@ def svg_line_points(values, x_pos, val_min, val_max, y_bottom, y_top):
 
 def svg_dots(values, x_pos, val_min, val_max, y_bottom, y_top,
              color, closed_idx=None):
-    """Return SVG circle elements for data points."""
     last = next((v for v in values if v is not None), (val_min + val_max) / 2)
     out = []
     for i, (x, v) in enumerate(zip(x_pos, values)):
@@ -42,29 +40,36 @@ def svg_dots(values, x_pos, val_min, val_max, y_bottom, y_top,
 
 def svg_val_label(val, x, val_min, val_max, y_bottom, y_top,
                   color, fmt="{:.2f}%", dy=-7):
-    """Label the last data point on a chart."""
     y = _y(val, val_min, val_max, y_bottom, y_top) + dy
     return (f'<text x="{x}" y="{y:.0f}" text-anchor="middle" '
             f'font-family="Arial" font-size="8" fill="{color}" '
             f'font-weight="bold">{fmt.format(val)}</text>')
 
-def build_inr_perf_chart(inr_vs_usd, inr_vs_eur, inr_vs_gbp, day_labels):
-    """Build the INR weekly performance SVG sparkline."""
+# ── INR performance chart ─────────────────────────────────────────────────────
+
+def build_inr_perf_chart(inr_vs_usd, inr_vs_eur, inr_vs_gbp, day_labels,
+                          chart_events=None, chart_callout=None):
+    """
+    Build the INR weekly performance SVG.
+    chart_events: list of {'label': str, 'x_idx': int}  (from commentary)
+    chart_callout: str for the insight annotation box inside the chart
+    """
     all_vals = [v for v in (inr_vs_usd + inr_vs_eur + inr_vs_gbp) if v is not None]
     if not all_vals:
-        return '<svg viewBox="0 0 560 105" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block;"><text x="280" y="52" text-anchor="middle" font-family="Arial" font-size="12" fill="#aaa">Chart data unavailable</text></svg>'
+        return ('<svg viewBox="0 0 560 105" xmlns="http://www.w3.org/2000/svg" '
+                'style="width:100%;display:block;">'
+                '<text x="280" y="52" text-anchor="middle" font-family="Arial" '
+                'font-size="12" fill="#aaa">Chart data unavailable</text></svg>')
 
-    pad   = 0.15
-    vmin  = min(all_vals) - pad
-    vmax  = max(all_vals) + pad
-    # Ensure zero is visible
-    vmin  = min(vmin, -0.05)
-    vmax  = max(vmax, 0.05)
+    pad  = 0.15
+    vmin = min(all_vals) - pad
+    vmax = max(all_vals) + pad
+    vmin = min(vmin, -0.05)
+    vmax = max(vmax, 0.05)
 
-    YB, YT = 82, 22   # y_bottom, y_top
+    YB, YT = 82, 22
     zero_y = _y(0, vmin, vmax, YB, YT)
 
-    # Zero line labels
     top_label  = f"+{vmax:.1f}%"
     zero_label = "0%"
     bot_label  = f"{vmin:.1f}%"
@@ -77,7 +82,6 @@ def build_inr_perf_chart(inr_vs_usd, inr_vs_eur, inr_vs_gbp, day_labels):
     dots_eur = svg_dots(inr_vs_eur, X5, vmin, vmax, YB, YT, "#1a5fa8")
     dots_gbp = svg_dots(inr_vs_gbp, X5, vmin, vmax, YB, YT, "#2e7d32")
 
-    # Final labels
     last_usd = next((v for v in reversed(inr_vs_usd) if v is not None), 0)
     last_eur = next((v for v in reversed(inr_vs_eur) if v is not None), 0)
     last_gbp = next((v for v in reversed(inr_vs_gbp) if v is not None), 0)
@@ -85,7 +89,41 @@ def build_inr_perf_chart(inr_vs_usd, inr_vs_eur, inr_vs_gbp, day_labels):
     # Day labels
     day_svg = ""
     for x, lbl in zip(X5, day_labels):
-        day_svg += f'<text x="{x}" y="100" text-anchor="middle" font-family="Arial" font-size="8" fill="#8a9aaa">{lbl}</text>\n    '
+        day_svg += (f'<text x="{x}" y="100" text-anchor="middle" '
+                    f'font-family="Arial" font-size="8" fill="#8a9aaa">{lbl}</text>\n    ')
+
+    # Event pin annotations
+    event_svg = ""
+    if chart_events:
+        for evt in (chart_events or [])[:2]:
+            idx = evt.get('x_idx', -1)
+            lbl = evt.get('label', '')
+            if 0 <= idx <= 4 and lbl:
+                x = X5[idx]
+                event_svg += (
+                    f'<line x1="{x}" y1="{YT}" x2="{x}" y2="{YB}" '
+                    f'stroke="#e8c44a" stroke-width="1" stroke-dasharray="3,2" opacity=".7"/>\n    '
+                    f'<text x="{x+1}" y="{YT+8}" font-family="Arial" '
+                    f'font-size="7.5" fill="#a07800">{lbl}</text>\n    '
+                )
+
+    # Callout box (replaces the generic "↓ = INR weaker" note when we have a real callout)
+    if chart_callout:
+        callout_text = chart_callout[:55]   # truncate if too long
+        callout_w = max(120, len(callout_text) * 5 + 8)
+        callout_x = 560 - callout_w - 20
+        callout_svg = (
+            f'<rect x="{callout_x}" y="4" width="{callout_w}" height="14" '
+            f'fill="#eef2f9" rx="2"/>\n    '
+            f'<text x="{callout_x+5}" y="13.5" font-family="Arial" font-size="7.5" '
+            f'fill="#002060" font-weight="bold">{callout_text}</text>\n    '
+        )
+    else:
+        callout_svg = (
+            '<rect x="340" y="4" width="218" height="14" fill="#eef2f9" rx="2"/>\n    '
+            '<text x="345" y="13.5" font-family="Arial" font-size="7.5" '
+            'fill="#002060" font-weight="bold">↓ = INR weaker vs that currency from Mon open</text>\n    '
+        )
 
     return f'''<svg viewBox="0 0 560 105" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block;">
     <line x1="52" y1="{YT}" x2="538" y2="{YT}" stroke="#ebebeb" stroke-width="1"/>
@@ -95,6 +133,7 @@ def build_inr_perf_chart(inr_vs_usd, inr_vs_eur, inr_vs_gbp, day_labels):
     <text x="50" y="{zero_y+3:.0f}" text-anchor="end" font-family="Arial" font-size="8" fill="#9ab">{zero_label}</text>
     <text x="50" y="{YB+3}" text-anchor="end" font-family="Arial" font-size="8" fill="#9ab">{bot_label}</text>
     {day_svg}
+    {event_svg}
     <polyline points="{pts_usd}" fill="none" stroke="#c0392b" stroke-width="2"/>
     {dots_usd}
     <polyline points="{pts_eur}" fill="none" stroke="#1a5fa8" stroke-width="2" stroke-dasharray="5,2"/>
@@ -110,25 +149,23 @@ def build_inr_perf_chart(inr_vs_usd, inr_vs_eur, inr_vs_gbp, day_labels):
     <text x="111" y="10.5" font-family="Arial" font-size="8" fill="#444">vs EUR</text>
     <line x1="149" y1="8" x2="157" y2="8" stroke="#2e7d32" stroke-width="2" stroke-dasharray="2,3"/>
     <text x="160" y="10.5" font-family="Arial" font-size="8" fill="#444">vs GBP</text>
-    <rect x="340" y="4" width="218" height="14" fill="#eef2f9" rx="2"/>
-    <text x="345" y="13.5" font-family="Arial" font-size="7.5" fill="#002060" font-weight="bold">↓ = INR weaker vs that currency from Mon open</text>
+    {callout_svg}
 </svg>'''
 
 
 def build_brent_inr_chart(brent_5d, usdinr_5d, day_labels):
-    """Build the Brent vs USD/INR 5-day dual-axis SVG."""
     b_clean = [v for v in brent_5d if v is not None]
     u_clean = [v for v in usdinr_5d if v is not None]
     if not b_clean or not u_clean:
-        return '<svg viewBox="0 0 560 88" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block;"><text x="280" y="44" text-anchor="middle" font-family="Arial" font-size="12" fill="#aaa">Chart data unavailable</text></svg>'
+        return ('<svg viewBox="0 0 560 88" xmlns="http://www.w3.org/2000/svg" '
+                'style="width:100%;display:block;">'
+                '<text x="280" y="44" text-anchor="middle" font-family="Arial" '
+                'font-size="12" fill="#aaa">Chart data unavailable</text></svg>')
 
-    # Brent scale
     bmin = min(b_clean) * 0.995
     bmax = max(b_clean) * 1.005
-    # USD/INR scale
     umin = min(u_clean) * 0.999
     umax = max(u_clean) * 1.001
-
     YB, YT = 70, 16
 
     pts_b = svg_line_points(brent_5d, X5, bmin, bmax, YB, YT)
@@ -138,7 +175,8 @@ def build_brent_inr_chart(brent_5d, usdinr_5d, day_labels):
 
     day_svg = ""
     for x, lbl in zip(X5, day_labels):
-        day_svg += f'<text x="{x}" y="83" text-anchor="middle" font-family="Arial" font-size="8" fill="#8a9aaa">{lbl}</text>\n    '
+        day_svg += (f'<text x="{x}" y="83" text-anchor="middle" '
+                    f'font-family="Arial" font-size="8" fill="#8a9aaa">{lbl}</text>\n    ')
 
     return f'''<svg viewBox="0 0 560 88" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block;">
     <line x1="52" y1="{YT}" x2="510" y2="{YT}" stroke="#f0e0e0" stroke-width="1"/>
@@ -159,12 +197,14 @@ def build_brent_inr_chart(brent_5d, usdinr_5d, day_labels):
     <text x="139" y="9.5" font-family="Arial" font-size="8" fill="#444">USD/INR (right)</text>
 </svg>'''
 
-# ── Range bar helper ──────────────────────────────────────────────────────────
+# ── Range bar ─────────────────────────────────────────────────────────────────
 
 def range_bar(pct, color="#666"):
-    return f'<div class="rbar-track"><div class="rbar-dot" style="left:{pct:.0f}%;background:{color};"></div></div>'
+    return (f'<div class="rbar-track">'
+            f'<div class="rbar-dot" style="left:{pct:.0f}%;background:{color};"></div>'
+            f'</div>')
 
-# ── Story card HTML ───────────────────────────────────────────────────────────
+# ── Story card ────────────────────────────────────────────────────────────────
 
 COLOR_CLASS = {
     'red':   'story red-s',
@@ -186,7 +226,7 @@ def story_card(story):
   {'<div class="story-link">' + links_html + '</div>' if links_html else ""}
 </div>'''
 
-# ── Week ahead calendar row ───────────────────────────────────────────────────
+# ── Calendar row ──────────────────────────────────────────────────────────────
 
 def cal_row(event):
     impact = event.get('impact', 'MED')
@@ -199,7 +239,7 @@ def cal_row(event):
       <td><span class="{tag_cls}">{impact}</span>&nbsp; {evt} &nbsp;<a href="{url}" target="_blank" style="font-size:9px;color:#1a5fa8;">→ Source</a></td>
     </tr>'''
 
-# ── Base CSS (shared by weekly and daily) ─────────────────────────────────────
+# ── Base CSS ──────────────────────────────────────────────────────────────────
 
 BASE_CSS = """
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -259,21 +299,43 @@ body{background:#f0f2f5;font-family:Arial,Helvetica,sans-serif;font-size:13px;co
 
 # ── Weekly HTML generator ─────────────────────────────────────────────────────
 
-def generate_weekly_html(data, stories, week_ahead_events):
+def generate_weekly_html(data, stories, week_ahead_events, commentary=None):
     """
     Generate the full weekly snapshot HTML.
-    data: dict from data_fetcher.get_weekly_data()
-    stories: list of dicts from macro_generator.get_weekly_stories()
-    week_ahead_events: list of dicts from macro_generator.get_week_ahead()
+    data        : dict from data_fetcher.get_weekly_data()
+    stories     : list of dicts from macro_generator.get_weekly_stories()
+    week_ahead  : list of dicts from macro_generator.get_week_ahead()
+    commentary  : dict from macro_generator.generate_snapshot_commentary()  (optional)
     """
-    d = data  # shorthand
+    d = data
+    c = commentary or {}
+
+    # ── Helper: pull from commentary or fall back to empty string ──
+    def ai(key, fallback=''):
+        return c.get(key, fallback) or fallback
+
+    # ── Mood tag (header badge) ──
+    mood_tag = ai('mood_tag', 'WEEKLY SNAPSHOT · AI-GENERATED DATA')
+
+    # ── Theme bar ──
+    theme_text = ai('theme', '')
+    theme_html = ''
+    if theme_text:
+        theme_html = (f'<div class="theme">'
+                      f'<strong>Week in one line:</strong> {theme_text}'
+                      f'</div>')
+
+    # ── INR insight: prefer AI, fallback to programmatic ──
+    inr_insight = ai('inr_insight', d.get('inr_insight', ''))
 
     # ── Charts ──
     inr_chart = build_inr_perf_chart(
         d.get('inr_vs_usd', [0]*5),
         d.get('inr_vs_eur', [0]*5),
         d.get('inr_vs_gbp', [0]*5),
-        d.get('day_labels', ['Mon','Tue','Wed','Thu','Fri'])
+        d.get('day_labels', ['Mon','Tue','Wed','Thu','Fri']),
+        chart_events=c.get('chart_events'),
+        chart_callout=c.get('chart_callout'),
     )
     brent_chart = build_brent_inr_chart(
         d.get('brent_5d', [None]*5),
@@ -284,7 +346,7 @@ def generate_weekly_html(data, stories, week_ahead_events):
     # ── Story cards ──
     stories_html = "\n".join(story_card(s) for s in stories)
 
-    # ── Week ahead rows ──
+    # ── Week ahead ──
     if week_ahead_events:
         cal_rows = "\n".join(cal_row(e) for e in week_ahead_events)
         week_ahead_section = f'''
@@ -299,7 +361,28 @@ def generate_weekly_html(data, stories, week_ahead_events):
 
     # ── INR WoW colour ──
     usd_wow_val = d.get('usdinr_wow_val', 0)
-    usd_wow_color = '#c0392b' if usd_wow_val > 0 else '#1a7a1a'
+    usd_wow_color = '#c0392b' if usd_wow_val > 0 else '#666'
+
+    # ── Card sub-commentary defaults ──
+    usdinr_sub = ai('usdinr_sub',
+        f'Range: {d.get("usdinr_wk_low","N/A")} – {d.get("usdinr_wk_high","N/A")} · Mon open: {d.get("usdinr_open","N/A")}')
+    dxy_sub    = ai('dxy_sub',
+        f'RBI Ref Rate: {d.get("rbi_ref","N/A")} · 52W: {d.get("dxy_52w_lo","N/A")} – {d.get("dxy_52w_hi","N/A")}')
+    eurinr_sub = ai('eurinr_sub', '')
+    gbpinr_sub = ai('gbpinr_sub', '')
+    jpyinr_sub = ai('jpyinr_sub', '')
+    cnhinr_sub = ai('cnhinr_sub', '')
+    us10y_sub  = ai('us10y_sub', '')
+    in10y_sub  = ai('in10y_sub', f'India–US spread: {d.get("yield_spread","N/A")}')
+    fed_sub    = ai('fed_sub', '■ On hold')
+    rbi_sub    = ai('rbi_sub', '■ On hold · Neutral stance')
+    brent_sub  = ai('brent_sub', f'Week high: ${d.get("brent_wk_high","N/A")}')
+    gold_sub   = ai('gold_sub', 'GC=F × USD/INR ÷ 3.11 · indicative')
+
+    # ── Also add yield spread to in10y_sub if not in AI text ──
+    spread_str = d.get('yield_spread', 'N/A')
+    if spread_str != 'N/A' and 'spread' not in in10y_sub.lower():
+        in10y_sub = f'{in10y_sub}<br>India–US spread: <strong>{spread_str}</strong>'
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -320,11 +403,14 @@ def generate_weekly_html(data, stories, week_ahead_events):
       <div class="hdr-title">Global FX — Weekly</div>
       <div class="hdr-week">WEEK {d.get("week_num","")} · {d.get("week_start","").upper()} – {d.get("week_end","").upper()}</div>
       <div class="hdr-sub">Internal &amp; Client Briefing · India FM Sales</div>
-      <div class="mood">WEEKLY SNAPSHOT · AI-GENERATED DATA</div>
+      <div class="mood">{mood_tag}</div>
     </div>
     <div class="hdr-date">Generated {d.get("generated_at","")}</div>
   </div>
 </div>
+
+<!-- THEME BAR -->
+{theme_html}
 
 <!-- SECTION 1 — CURRENCY -->
 <div class="sec-hdr blue"><span class="sec-num">01</span> CURRENCY</div>
@@ -335,13 +421,10 @@ def generate_weekly_html(data, stories, week_ahead_events):
     <div class="lbl">USD / INR — Week Close</div>
     <div class="val">{d.get("usdinr_close","N/A")}</div>
     <div class="chg">{d.get("usdinr_wow","N/A")}</div>
-    <div class="sub">
-      Range: <strong>{d.get("usdinr_wk_low","N/A")}</strong> – <strong>{d.get("usdinr_wk_high","N/A")}</strong><br>
-      Mon open: {d.get("usdinr_open","N/A")}
-    </div>
+    <div class="sub">{usdinr_sub}</div>
     <div class="rbar">
       <div class="rbar-lbl"><span>52W Lo {d.get("usdinr_52w_lo","N/A")}</span><span>52W Hi {d.get("usdinr_52w_hi","N/A")}</span></div>
-      {range_bar(d.get("usdinr_52w_pct",50), "#c0392b" if usd_wow_val > 0 else "#666")}
+      {range_bar(d.get("usdinr_52w_pct",50), usd_wow_color)}
     </div>
     <div class="src-line"><a href="https://www.rbi.org.in/Scripts/ReferenceRateArchive.aspx" target="_blank">RBI Reference Rates</a> · <a href="https://finance.yahoo.com/quote/USDINR=X/" target="_blank">Yahoo Finance</a></div>
   </div>
@@ -349,19 +432,16 @@ def generate_weekly_html(data, stories, week_ahead_events):
     <div class="lbl">DXY — Dollar Index</div>
     <div class="val">{d.get("dxy_close","N/A")}</div>
     <div class="chg">{d.get("dxy_wow","N/A")}</div>
-    <div class="sub">
-      RBI Ref Rate: <strong>{d.get("rbi_ref","N/A")}</strong> {d.get("rbi_ref_wow","")}<br>
-      52W: {d.get("dxy_52w_lo","N/A")} – {d.get("dxy_52w_hi","N/A")}
-    </div>
+    <div class="sub">{dxy_sub}</div>
     <div class="rbar">
-      <div class="rbar-lbl"><span>52W Lo</span><span>52W Hi</span></div>
+      <div class="rbar-lbl"><span>52W Lo {d.get("dxy_52w_lo","N/A")}</span><span>52W Hi {d.get("dxy_52w_hi","N/A")}</span></div>
       {range_bar(d.get("dxy_52w_pct",50), "#666")}
     </div>
     <div class="src-line"><a href="https://www.investing.com/indices/usdollar" target="_blank">Investing.com DXY</a></div>
   </div>
 </div>
 
-<div class="insight">{d.get("inr_insight","")}</div>
+<div class="insight">{inr_insight}</div>
 
 <div class="chart-wrap" style="border-top:1px solid #eef0f3;">
   <div class="chart-title">INR weekly performance — % change from Mon open (↓ = INR weaker)</div>
@@ -375,6 +455,7 @@ def generate_weekly_html(data, stories, week_ahead_events):
     <div class="lbl">EUR / INR</div>
     <div class="val-md">{d.get("eurinr_close","N/A")}</div>
     <div class="chg">{d.get("eurinr_wow","N/A")}</div>
+    <div class="sub">{eurinr_sub}</div>
     <div class="rbar">
       <div class="rbar-lbl"><span>52W Lo ₹{d.get("eurinr_52w_lo","N/A")}</span><span>Hi ₹{d.get("eurinr_52w_hi","N/A")}</span></div>
       {range_bar(d.get("eurinr_52w_pct",50), "#c0392b" if d.get("eurinr_wow_val",0) > 0 else "#666")}
@@ -385,6 +466,7 @@ def generate_weekly_html(data, stories, week_ahead_events):
     <div class="lbl">GBP / INR</div>
     <div class="val-md">{d.get("gbpinr_close","N/A")}</div>
     <div class="chg">{d.get("gbpinr_wow","N/A")}</div>
+    <div class="sub">{gbpinr_sub}</div>
     <div class="rbar">
       <div class="rbar-lbl"><span>52W Lo ₹{d.get("gbpinr_52w_lo","N/A")}</span><span>Hi ₹{d.get("gbpinr_52w_hi","N/A")}</span></div>
       {range_bar(d.get("gbpinr_52w_pct",50), "#c0392b" if d.get("gbpinr_wow_val",0) > 0 else "#666")}
@@ -397,6 +479,7 @@ def generate_weekly_html(data, stories, week_ahead_events):
     <div class="lbl">JPY / INR (per 100 JPY)</div>
     <div class="val-md">₹{d.get("jpyinr_close","N/A")}</div>
     <div class="chg">{d.get("jpyinr_wow","N/A")}</div>
+    <div class="sub">{jpyinr_sub}</div>
     <div class="rbar">
       <div class="rbar-lbl"><span>52W Lo ₹{d.get("jpyinr_52w_lo","N/A")}</span><span>Hi ₹{d.get("jpyinr_52w_hi","N/A")}</span></div>
       {range_bar(d.get("jpyinr_52w_pct",50), "#c0392b" if d.get("jpyinr_wow_val",0) > 0 else "#666")}
@@ -407,6 +490,7 @@ def generate_weekly_html(data, stories, week_ahead_events):
     <div class="lbl">CNH / INR (per CNH)</div>
     <div class="val-md">₹{d.get("cnhinr_close","N/A")}</div>
     <div class="chg">{d.get("cnhinr_wow","N/A")}</div>
+    <div class="sub">{cnhinr_sub}</div>
     <div class="rbar">
       <div class="rbar-lbl"><span>52W Lo ₹{d.get("cnhinr_52w_lo","N/A")}</span><span>Hi ₹{d.get("cnhinr_52w_hi","N/A")}</span></div>
       {range_bar(d.get("cnhinr_52w_pct",50), "#c0392b" if d.get("cnhinr_wow_val",0) > 0 else "#666")}
@@ -424,6 +508,7 @@ def generate_weekly_html(data, stories, week_ahead_events):
     <div class="lbl">US 10Y Treasury</div>
     <div class="val">{d.get("us10y_close","N/A")}%</div>
     <div class="chg">{d.get("us10y_wow","N/A")}</div>
+    <div class="sub">{us10y_sub}</div>
     <div class="rbar">
       <div class="rbar-lbl"><span>52W Lo {d.get("us10y_52w_lo","N/A")}%</span><span>Hi {d.get("us10y_52w_hi","N/A")}%</span></div>
       {range_bar(d.get("us10y_52w_pct",50), "#c0392b" if d.get("us10y_wow_val",0) > 0 else "#666")}
@@ -434,7 +519,7 @@ def generate_weekly_html(data, stories, week_ahead_events):
     <div class="lbl">India 10Y G-Sec</div>
     <div class="val">{d.get("in10y_close","N/A")}%</div>
     <div class="chg">{d.get("in10y_wow","N/A")}</div>
-    <div class="sub">India–US spread: <strong>{d.get("yield_spread","N/A")}</strong></div>
+    <div class="sub">{in10y_sub}</div>
     <div class="rbar">
       <div class="rbar-lbl"><span>52W Lo {d.get("in10y_52w_lo","N/A")}%</span><span>Hi {d.get("in10y_52w_hi","N/A")}%</span></div>
       {range_bar(d.get("in10y_52w_pct",50), "#c0392b" if d.get("in10y_wow_val",0) > 0 else "#666")}
@@ -448,13 +533,13 @@ def generate_weekly_html(data, stories, week_ahead_events):
   <div class="card">
     <div class="lbl">Fed Funds Rate</div>
     <div class="val" style="font-size:17px;">{d.get("fed_rate","N/A")}</div>
-    <div class="chg grey">■ On hold</div>
+    <div class="chg grey">{fed_sub}</div>
     <div class="src-line"><a href="https://www.federalreserve.gov/monetarypolicy/openmarket.htm" target="_blank">Fed Reserve</a></div>
   </div>
   <div class="card">
     <div class="lbl">RBI Repo Rate</div>
     <div class="val" style="font-size:17px;">{d.get("rbi_rate","N/A")}</div>
-    <div class="chg grey">■ On hold · Neutral stance</div>
+    <div class="chg grey">{rbi_sub}</div>
     <div class="src-line"><a href="https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx" target="_blank">RBI MPC statement</a></div>
   </div>
 </div>
@@ -465,14 +550,14 @@ def generate_weekly_html(data, stories, week_ahead_events):
     <div class="lbl">Brent Crude</div>
     <div class="val">${d.get("brent_close","N/A")}</div>
     <div class="chg">{d.get("brent_wow","N/A")}</div>
-    <div class="sub">Week high: <strong>${d.get("brent_wk_high","N/A")}</strong></div>
+    <div class="sub">{brent_sub}</div>
     <div class="src-line"><a href="https://tradingeconomics.com/commodity/brent-crude-oil" target="_blank">TradingEconomics</a> · <a href="https://finance.yahoo.com/quote/BZ=F/" target="_blank">Yahoo Finance BZ=F</a></div>
   </div>
   <div class="card">
     <div class="lbl">MCX Gold (₹/10g proxy)</div>
     <div class="val-md">{d.get("gold_inr","N/A")}</div>
     <div class="chg">{d.get("gold_wow","N/A")}</div>
-    <div class="sub">GC=F × USD/INR ÷ 3.11 · indicative</div>
+    <div class="sub">{gold_sub}</div>
     <div class="src-line"><a href="https://www.mcxindia.com/market-data/spot-market-price" target="_blank">MCX India</a> · <a href="https://finance.yahoo.com/quote/GC=F/" target="_blank">Yahoo Finance GC=F</a></div>
   </div>
 </div>
@@ -493,7 +578,7 @@ def generate_weekly_html(data, stories, week_ahead_events):
 <div class="ftr">
   <strong>Standard Chartered Financial Markets — India FM Sales Desk</strong><br>
   Week {d.get("week_num","")} · {d.get("week_start","")} – {d.get("week_end","")} · Generated {d.get("generated_at","")}<br>
-  Data: <a href="https://finance.yahoo.com" target="_blank">Yahoo Finance</a> · <a href="https://fred.stlouisfed.org" target="_blank">FRED</a> · <a href="https://www.rbi.org.in" target="_blank">RBI</a> · <a href="https://tradingeconomics.com" target="_blank">TradingEconomics</a> · Macro stories: Gemini AI + Google Search<br>
+  Data: <a href="https://finance.yahoo.com" target="_blank">Yahoo Finance</a> · <a href="https://fred.stlouisfed.org" target="_blank">FRED</a> · <a href="https://www.rbi.org.in" target="_blank">RBI</a> · <a href="https://tradingeconomics.com" target="_blank">TradingEconomics</a> · Commentary &amp; stories: Gemini AI + Google Search<br>
   <span style="color:#c0392b;">⚠ Policy rates (Fed/RBI) are static — update manually if changed. MCX Gold is indicative (GC=F proxy).</span>
 </div>
 
@@ -504,12 +589,27 @@ def generate_weekly_html(data, stories, week_ahead_events):
 
 # ── Daily HTML generator ──────────────────────────────────────────────────────
 
-def generate_daily_html(data, stories):
-    """
-    Generate the full daily snapshot HTML (last 24 hours).
-    """
+def generate_daily_html(data, stories, commentary=None):
+    """Generate the full daily snapshot HTML."""
     d = data
+    c = commentary or {}
+
+    def ai(key, fallback=''):
+        return c.get(key, fallback) or fallback
+
+    mood_tag  = ai('mood_tag', 'DAILY SNAPSHOT · 24H CHANGE')
+    theme_text = ai('theme', '')
+    theme_html = ''
+    if theme_text:
+        theme_html = (f'<div class="theme">'
+                      f'<strong>Today:</strong> {theme_text}'
+                      f'</div>')
+
+    inr_insight = ai('inr_insight', '')
     stories_html = "\n".join(story_card(s) for s in stories)
+
+    usdinr_sub = ai('usdinr_sub', f'RBI Ref Rate: {d.get("rbi_ref","N/A")}')
+    dxy_sub    = ai('dxy_sub', '')
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -529,11 +629,13 @@ def generate_daily_html(data, stories):
       <div class="hdr-title">Global FX — Daily</div>
       <div class="hdr-week">{d.get("date","").upper()}</div>
       <div class="hdr-sub">Internal &amp; Client Briefing · India FM Sales</div>
-      <div class="mood">DAILY SNAPSHOT · 24H CHANGE</div>
+      <div class="mood">{mood_tag}</div>
     </div>
     <div class="hdr-date">Generated {d.get("generated_at","")}</div>
   </div>
 </div>
+
+{theme_html}
 
 <div class="sec-hdr blue"><span class="sec-num">01</span> CURRENCY</div>
 <div class="sub-lbl">INR Spot &amp; Dollar Index</div>
@@ -542,7 +644,7 @@ def generate_daily_html(data, stories):
     <div class="lbl">USD / INR</div>
     <div class="val">{d.get("usdinr_close","N/A")}</div>
     <div class="chg">{d.get("usdinr_chg","N/A")}</div>
-    <div class="sub">RBI Ref Rate: <strong>{d.get("rbi_ref","N/A")}</strong></div>
+    <div class="sub">{usdinr_sub}</div>
     <div class="rbar">
       <div class="rbar-lbl"><span>52W Lo {d.get("usdinr_52w_lo","N/A")}</span><span>Hi {d.get("usdinr_52w_hi","N/A")}</span></div>
       {range_bar(d.get("usdinr_52w_pct",50))}
@@ -553,9 +655,12 @@ def generate_daily_html(data, stories):
     <div class="lbl">DXY — Dollar Index</div>
     <div class="val">{d.get("dxy_close","N/A")}</div>
     <div class="chg">{d.get("dxy_chg","N/A")}</div>
+    <div class="sub">{dxy_sub}</div>
     <div class="src-line"><a href="https://www.investing.com/indices/usdollar" target="_blank">Investing.com</a></div>
   </div>
 </div>
+
+{('<div class="insight">' + inr_insight + '</div>') if inr_insight else ''}
 
 <div class="sub-lbl">G3 vs INR — 24H Change</div>
 <div class="row">
@@ -637,7 +742,7 @@ def generate_daily_html(data, stories):
 <div class="ftr">
   <strong>Standard Chartered Financial Markets — India FM Sales Desk</strong><br>
   Daily Snapshot · {d.get("date","")} · Generated {d.get("generated_at","")}<br>
-  Data: <a href="https://finance.yahoo.com" target="_blank">Yahoo Finance</a> · <a href="https://fred.stlouisfed.org" target="_blank">FRED</a> · <a href="https://www.rbi.org.in" target="_blank">RBI</a> · Macro stories: Gemini AI + Google Search<br>
+  Data: <a href="https://finance.yahoo.com" target="_blank">Yahoo Finance</a> · <a href="https://fred.stlouisfed.org" target="_blank">FRED</a> · <a href="https://www.rbi.org.in" target="_blank">RBI</a> · Commentary &amp; stories: Gemini AI + Google Search<br>
   <span style="color:#c0392b;">⚠ Policy rates are static — update if changed. MCX Gold is indicative.</span>
 </div>
 
