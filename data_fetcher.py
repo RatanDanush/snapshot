@@ -128,7 +128,7 @@ def fetch_india_10y(start, end):
         except Exception:
             pass
     # Final fallback — standard download
-    return fetch('GIND10YR=X', start, end, interval)
+    return fetch('GIND10YR=X', start, end)  # default interval='1d'
 
 
 
