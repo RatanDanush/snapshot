@@ -145,6 +145,21 @@ def get_52w(ticker):
     except Exception:
         return None, None
 
+def get_52w_india_10y(manual_rate=None):
+    """
+    52-week range for India 10Y.
+    yfinance tickers for India bonds are unreliable — falls back to
+    estimating a plausible range from the manual rate if provided.
+    """
+    for ticker in ['GIND10YR=X', '^INBMK', '^IN10YT=RR']:
+        lo, hi = get_52w(ticker)
+        if lo is not None:
+            return lo, hi
+    # Estimate from manual rate: ±50 bps band as a reasonable 52W proxy
+    if manual_rate:
+        return round(manual_rate - 0.50, 2), round(manual_rate + 0.50, 2)
+    return None, None
+
 # ── Math helpers ──────────────────────────────────────────────────────────────
 
 def pct_change(current, prior):
@@ -180,9 +195,11 @@ def fmt_chg(val, unit='%', invert=False):
 
 # ── Weekly data fetch ─────────────────────────────────────────────────────────
 
-def get_weekly_data():
+def get_weekly_data(india_10y_manual=None):
     """
     Fetch all market data for the weekly snapshot.
+    india_10y_manual: float override for India 10Y yield (e.g. 6.85).
+                      Used when yfinance cannot fetch the ticker (common).
     Returns a dict with all values needed by the HTML generator.
     """
     mon, fri = last_completed_week()
@@ -331,10 +348,10 @@ def get_weekly_data():
     # ── Yields ──
     us_close = safe_close(cur['us10y'])
     us_prior  = safe_close(prv['us10y'])
-    in_close  = safe_close(cur['in10y'])
-    in_prior  = safe_close(prv['in10y'])
+    in_close  = safe_close(cur['in10y']) or india_10y_manual
+    in_prior  = safe_close(prv['in10y']) or india_10y_manual  # prior unknown if manual
     us_lo52, us_hi52 = get_52w('^TNX')
-    in_lo52, in_hi52 = get_52w('GIND10YR=X')
+    in_lo52, in_hi52 = get_52w_india_10y(india_10y_manual)
 
     data['us10y_close']   = round(us_close, 2) if us_close else 'N/A'
     data['us10y_wow']     = fmt_chg(bps_change(us_close, us_prior), unit='bps') if us_close else 'N/A'
@@ -415,9 +432,10 @@ def get_weekly_data():
 
 # ── Daily data fetch ──────────────────────────────────────────────────────────
 
-def get_daily_data():
+def get_daily_data(india_10y_manual=None):
     """
     Fetch all market data for the daily snapshot (last 24 hours).
+    india_10y_manual: float override for India 10Y yield (e.g. 6.85).
     Returns a dict with all values needed by the HTML generator.
     """
     today = datetime.now()
@@ -501,8 +519,8 @@ def get_daily_data():
 
     us_now  = today_close(cur['us10y'])
     us_prev = yesterday_close(cur['us10y'])
-    in_now  = today_close(cur['in10y'])
-    in_prev = yesterday_close(cur['in10y'])
+    in_now  = today_close(cur['in10y']) or india_10y_manual
+    in_prev = yesterday_close(cur['in10y']) or india_10y_manual
     data['us10y_close']   = round(us_now, 2) if us_now else 'N/A'
     data['us10y_chg']     = fmt_chg(bps_change(us_now, us_prev), unit='bps') if us_now else 'N/A'
     data['in10y_close']   = round(in_now, 2) if in_now else 'N/A'

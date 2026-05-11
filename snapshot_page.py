@@ -99,6 +99,37 @@ def render_snapshot_tab():
             '</div>', unsafe_allow_html=True
         )
 
+    # ── India 10Y manual input ─────────────────────────────────────────────────
+    st.markdown(
+        '<div style="font-size:9px;font-weight:700;color:#3a3a3a;'
+        'letter-spacing:.12em;padding-bottom:6px;border-top:1px solid #181818;'
+        'border-bottom:1px solid #181818;margin:10px 0 8px;">INDIA 10Y G-SEC (MANUAL)</div>',
+        unsafe_allow_html=True
+    )
+    col_r1, col_r2 = st.columns([2, 5])
+    with col_r1:
+        india_10y_input = st.text_input(
+            "India 10Y yield (%)",
+            placeholder="e.g. 6.85",
+            help="Yahoo Finance no longer provides this ticker reliably. "
+                 "Paste today's 10Y G-Sec yield from CCIL / NDS-OM / RBI.",
+            label_visibility="collapsed"
+        )
+    with col_r2:
+        st.markdown(
+            '<div style="font-size:10px;color:#5a6a80;padding:8px 0 0;">'
+            '📌 Enter India 10Y G-Sec yield — Yahoo Finance no longer provides this ticker. '
+            'Source: <a href="https://www.ccil.org.in" target="_blank" style="color:#1a5fa8;">CCIL</a> · '
+            '<a href="https://www.rbi.org.in" target="_blank" style="color:#1a5fa8;">RBI</a>'
+            '</div>', unsafe_allow_html=True
+        )
+    india_10y_manual = None
+    if india_10y_input:
+        try:
+            india_10y_manual = float(india_10y_input.strip())
+        except ValueError:
+            st.warning("India 10Y value must be a number, e.g. 6.85", icon="⚠️")
+
     with st.expander("📋 Pipeline details", expanded=False):
         st.markdown("""
 | Step | What | Time |
@@ -143,7 +174,7 @@ def render_snapshot_tab():
         st.write("📡 **Step 1/5** — Fetching market data (Yahoo Finance)…")
         t1 = time.time()
         try:
-            data = get_weekly_data() if mode == "weekly" else get_daily_data()
+            data = get_weekly_data(india_10y_manual=india_10y_manual) if mode == "weekly" else get_daily_data(india_10y_manual=india_10y_manual)
             n_ok = len([v for v in data.values() if v != "N/A"])
             st.write(f"✅ Market data ready — {n_ok} data points ({round(time.time()-t1, 1)}s)")
         except Exception as e:
@@ -237,27 +268,75 @@ def render_snapshot_tab():
         'letter-spacing:.12em;padding-bottom:6px;border-bottom:1px solid #181818;'
         'margin-bottom:10px;">PREVIEW</div>', unsafe_allow_html=True
     )
-    st.caption("Scroll within the preview · Download to open in browser or paste into Outlook/Gmail")
-    components.html(html, height=680, scrolling=True)
+    st.caption("Scroll within the preview · Use the buttons below to download")
 
-    # ── Download ──────────────────────────────────────────────────────────────
+    # Inject html2canvas so users can save as JPEG directly from the preview
+    jpeg_fname = (f"stanc_weekly_w{data.get('week_num','')}_{data.get('year','')}.jpg"
+                  if mode == "weekly"
+                  else f"stanc_daily_{datetime.now().strftime('%Y%m%d')}.jpg")
+    preview_html = html + f"""
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
+  integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA=="
+  crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+#_jbtn{{position:fixed;bottom:14px;right:14px;z-index:99999;
+  background:#002060;color:#c8a84b;border:2px solid #c8a84b;
+  padding:7px 14px;font-family:Arial,sans-serif;font-size:11px;font-weight:700;
+  cursor:pointer;border-radius:3px;letter-spacing:.08em;box-shadow:0 2px 8px rgba(0,0,0,.35);}}
+#_jbtn:hover{{background:#c8a84b;color:#002060;}}
+#_jsta{{position:fixed;bottom:52px;right:14px;z-index:99999;
+  font-family:Arial,sans-serif;font-size:10px;color:#002060;display:none;
+  background:#fff;padding:3px 8px;border-radius:2px;border:1px solid #c8a84b;}}
+</style>
+<button id="_jbtn" onclick="_dlJpeg()">⬇ JPEG</button>
+<div id="_jsta">Rendering…</div>
+<script>
+function _dlJpeg(){{
+  var btn=document.getElementById('_jbtn'),sta=document.getElementById('_jsta');
+  btn.style.display='none'; sta.style.display='block';
+  var el=document.querySelector('.wrap')||document.body;
+  html2canvas(el,{{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false}})
+  .then(function(c){{
+    var a=document.createElement('a');
+    a.download='{jpeg_fname}';
+    a.href=c.toDataURL('image/jpeg',0.93);
+    a.click();
+    btn.style.display='block'; sta.style.display='none';
+  }}).catch(function(){{
+    btn.style.display='block'; sta.style.display='none';
+    alert('JPEG render failed — use HTML download instead.');
+  }});
+}}
+</script>"""
+    components.html(preview_html, height=680, scrolling=True)
+
+    # ── Download buttons ──────────────────────────────────────────────────────
     st.markdown("---")
     fname = (f"stanc_weekly_w{data.get('week_num','')}_{data.get('year','')}.html"
              if mode == "weekly"
              else f"stanc_daily_{datetime.now().strftime('%Y%m%d')}.html")
 
-    st.download_button(
-        label="⬇️  Download HTML",
-        data=html.encode("utf-8"),
-        file_name=fname,
-        mime="text/html",
-        use_container_width=True,
-        type="primary"
-    )
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        st.download_button(
+            label="⬇️  Download HTML",
+            data=html.encode("utf-8"),
+            file_name=fname,
+            mime="text/html",
+            use_container_width=True,
+            type="primary"
+        )
+    with dl_col2:
+        st.markdown(
+            '<div style="background:#f0f4fa;border:1px solid #c8a84b;border-radius:4px;'
+            'padding:7px 14px;font-size:11px;color:#002060;font-weight:700;text-align:center;">'
+            '📷 JPEG — click <b>⬇ JPEG</b> button inside the preview above'
+            '</div>', unsafe_allow_html=True
+        )
 
     st.markdown(
         '<div class="snap-warn">'
-        '⚑ Distribute: Download → open in browser to verify → '
-        'paste into Outlook (Insert HTML) or Gmail, or attach the .html file.'
+        '⚑ HTML: Download → open in browser → paste into Outlook (Insert HTML) or Gmail. &nbsp;'
+        '⚑ JPEG: Click ⬇ JPEG in the preview → attach to email or save for sharing.'
         '</div>', unsafe_allow_html=True
     )
