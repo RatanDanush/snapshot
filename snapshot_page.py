@@ -122,6 +122,7 @@ def render_snapshot_tab():
         return
 
     mode = "weekly" if gen_weekly else "daily"
+    india_10y_manual = None   # no manual override — Gemini will fetch automatically
 
     try:
         from data_fetcher import get_weekly_data, get_daily_data, last_completed_week, prior_week
