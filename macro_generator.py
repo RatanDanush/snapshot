@@ -380,3 +380,45 @@ Return ONLY a valid JSON array, no markdown fences:
     if isinstance(result, list) and result:
         return result[:2], err2
     return fallback_stories(2, reason=err2 or 'No result'), err2
+
+
+# ── India 10Y yield fetch (yfinance unreliable — use Gemini search) ───────────
+
+def get_india_10y_yields(api_key, week_end_str, prior_week_end_str):
+    """
+    Use Gemini + Google Search to fetch India 10Y G-Sec closing yield
+    for the current week and the prior week.
+
+    Returns (current: float|None, prior: float|None, error: str|None).
+    Sanity-checks results to 4.0–10.0% range.
+    """
+    prompt = f"""Search for the India 10-year government bond yield (G-Sec 10Y benchmark).
+
+Find the closing yield (%) for:
+1. The week ending {week_end_str}
+2. The week ending {prior_week_end_str}
+
+Search sources: CCIL, FIMMDA, RBI, Reuters India bonds, Bloomberg India, Investing.com.
+The yield is typically reported as a percentage like 6.87% or 7.02%.
+
+Return ONLY a valid JSON object, no markdown, no explanation:
+{{"current": <number>, "prior": <number>}}
+
+If a value cannot be found, use null. Example: {{"current": 6.87, "prior": 6.91}}"""
+
+    text, model, elapsed, err = _call_best(api_key, prompt, use_search=True)
+    if err:
+        return None, None, f'India 10Y search ({elapsed}s): {err}'
+
+    result = extract_json(text)
+    if not isinstance(result, dict):
+        return None, None, f'India 10Y parse failed ({elapsed}s). Output: {(text or "")[:200]}'
+
+    def _safe(v):
+        try:
+            f = float(v)
+            return round(f, 2) if 4.0 <= f <= 10.0 else None   # sanity: plausible India 10Y range
+        except (TypeError, ValueError):
+            return None
+
+    return _safe(result.get('current')), _safe(result.get('prior')), None
