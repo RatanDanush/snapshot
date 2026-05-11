@@ -99,6 +99,45 @@ def render_snapshot_tab():
             '</div>', unsafe_allow_html=True
         )
 
+    # ── India 10Y manual fallback ─────────────────────────────────────────────
+    st.markdown(
+        '<div style="font-size:9px;color:#5a6a80;margin:6px 0 4px;">'
+        '📌 <b>India 10Y G-Sec</b> — auto-fetched via Gemini. '
+        'Override below if Gemini returns N/A '
+        '(source: <a href="https://www.ccil.org.in" target="_blank">CCIL</a> / '
+        '<a href="https://www.rbi.org.in" target="_blank">RBI</a>):'
+        '</div>', unsafe_allow_html=True
+    )
+    in10y_col1, in10y_col2, in10y_col3 = st.columns([2, 2, 3])
+    with in10y_col1:
+        in10y_yield_str = st.text_input(
+            "India 10Y yield (%)", placeholder="e.g. 6.95",
+            label_visibility="collapsed", key="in10y_yield"
+        )
+    with in10y_col2:
+        in10y_bps_str = st.text_input(
+            "WoW change (bps)", placeholder="e.g. -9  or  +4",
+            label_visibility="collapsed", key="in10y_bps"
+        )
+    with in10y_col3:
+        st.markdown(
+            '<div style="font-size:10px;color:#7a8a9a;padding:8px 0;">'
+            'Yield (%) · WoW bps (negative = fell). Leave blank to auto-fetch.'
+            '</div>', unsafe_allow_html=True
+        )
+
+    # Parse manual India 10Y inputs
+    _in10y_manual = None
+    _in10y_prior_manual = None
+    if in10y_yield_str.strip():
+        try:
+            _in10y_manual = float(in10y_yield_str.strip())
+            if in10y_bps_str.strip():
+                bps = float(in10y_bps_str.strip())
+                _in10y_prior_manual = round(_in10y_manual - bps / 100, 2)
+        except ValueError:
+            st.warning("India 10Y: enter numbers only (e.g. 6.95 and -9)", icon="⚠️")
+
     with st.expander("📋 Pipeline details", expanded=False):
         st.markdown("""
 | Step | What | Time |
@@ -122,7 +161,8 @@ def render_snapshot_tab():
         return
 
     mode = "weekly" if gen_weekly else "daily"
-    india_10y_manual = None   # no manual override — Gemini will fetch automatically
+    india_10y_manual = _in10y_manual            # None if user left blank
+    india_10y_prior_manual = _in10y_prior_manual  # None if user left blank
 
     try:
         from data_fetcher import get_weekly_data, get_daily_data, last_completed_week, prior_week
@@ -145,13 +185,14 @@ def render_snapshot_tab():
         st.write("📡 **Step 1/5** — Fetching market data (Yahoo Finance)…")
         t1 = time.time()
         try:
-            in10y_cur = india_10y_manual   # manual field value (may be None)
-            in10y_prior = None
+            in10y_cur = india_10y_manual       # from manual field (may be None)
+            in10y_prior = india_10y_prior_manual  # computed from bps input (may be None)
 
             if mode == "weekly":
                 if in10y_cur:
-                    # Manual override provided — skip Gemini fetch
-                    st.write(f"   ↳ India 10Y: manual override {in10y_cur}% (no prior WoW)")
+                    # Manual override — skip Gemini fetch
+                    bps_txt = f"{round((in10y_cur - in10y_prior)*100):+.0f} bps WoW" if in10y_prior else "no prior"
+                    st.write(f"   ↳ India 10Y: manual {in10y_cur}% · {bps_txt}")
                 else:
                     # Auto-fetch both current and prior week via Gemini search
                     st.write("   ↳ India 10Y: yfinance unavailable — fetching via Gemini Search…")
@@ -166,7 +207,7 @@ def render_snapshot_tab():
                         prior_txt = f"{in10y_prior}%" if in10y_prior else "N/A"
                         st.write(f"   ↳ India 10Y: current={in10y_cur}% · prior={prior_txt}")
                     else:
-                        st.write(f"   ↳ India 10Y: Gemini fetch failed — {in10y_err or 'no data'}")
+                        st.write(f"   ↳ India 10Y: Gemini fetch failed — enter manually above")
                         errors.append(f"India 10Y: {in10y_err or 'Gemini returned no data'}")
 
                 data = get_weekly_data(
