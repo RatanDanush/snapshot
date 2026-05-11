@@ -382,7 +382,7 @@ def generate_weekly_html(data, stories, week_ahead_events, commentary=None):
     fed_sub    = ai('fed_sub', '■ On hold')
     rbi_sub    = ai('rbi_sub', '■ On hold · Neutral stance')
     brent_sub  = ai('brent_sub', f'Week high: ${d.get("brent_wk_high","N/A")}')
-    gold_sub   = ai('gold_sub', 'GC=F × USD/INR ÷ 3.11 · indicative')
+    gold_sub   = ai('gold_sub', 'COMEX GC=F · front-month · $/troy oz')
 
     # ── Also add yield spread to in10y_sub if not in AI text ──
     spread_str = d.get('yield_spread', 'N/A')
@@ -561,11 +561,11 @@ def generate_weekly_html(data, stories, week_ahead_events, commentary=None):
     <div class="src-line"><a href="https://tradingeconomics.com/commodity/brent-crude-oil" target="_blank">TradingEconomics</a> · <a href="https://finance.yahoo.com/quote/BZ=F/" target="_blank">Yahoo Finance BZ=F</a></div>
   </div>
   <div class="card">
-    <div class="lbl">MCX Gold (₹/10g proxy)</div>
-    <div class="val-md">{d.get("gold_inr","N/A")}</div>
+    <div class="lbl">Gold — International ($/oz)</div>
+    <div class="val-md">${d.get("gold_usd","N/A")}</div>
     <div class="chg">{d.get("gold_wow","N/A")}</div>
     <div class="sub">{gold_sub}</div>
-    <div class="src-line"><a href="https://www.mcxindia.com/market-data/spot-market-price" target="_blank">MCX India</a> · <a href="https://finance.yahoo.com/quote/GC=F/" target="_blank">Yahoo Finance GC=F</a></div>
+    <div class="src-line"><a href="https://finance.yahoo.com/quote/GC=F/" target="_blank">Yahoo Finance GC=F (COMEX)</a></div>
   </div>
 </div>
 
@@ -735,10 +735,10 @@ def generate_daily_html(data, stories, commentary=None):
     <div class="src-line"><a href="https://tradingeconomics.com/commodity/brent-crude-oil" target="_blank">TradingEconomics</a></div>
   </div>
   <div class="card">
-    <div class="lbl">MCX Gold (proxy)</div>
-    <div class="val-md">{d.get("gold_inr","N/A")}</div>
+    <div class="lbl">Gold — International ($/oz)</div>
+    <div class="val-md">${d.get("gold_usd","N/A")}</div>
     <div class="chg">{d.get("gold_chg","N/A")}</div>
-    <div class="src-line"><a href="https://www.mcxindia.com" target="_blank">MCX India</a></div>
+    <div class="src-line"><a href="https://finance.yahoo.com/quote/GC=F/" target="_blank">Yahoo Finance GC=F</a></div>
   </div>
 </div>
 

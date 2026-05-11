@@ -145,19 +145,6 @@ def get_52w(ticker):
     except Exception:
         return None, None
 
-def get_52w_india_10y(manual_rate=None):
-    """
-    52-week range for India 10Y.
-    yfinance tickers unreliable — estimates ±50 bps band from manual rate as proxy.
-    """
-    for ticker in ['GIND10YR=X', '^INBMK', '^IN10YT=RR']:
-        lo, hi = get_52w(ticker)
-        if lo is not None:
-            return lo, hi
-    if manual_rate:
-        return round(manual_rate - 0.50, 2), round(manual_rate + 0.50, 2)
-    return None, None
-
 # ── Math helpers ──────────────────────────────────────────────────────────────
 
 def pct_change(current, prior):
@@ -193,12 +180,9 @@ def fmt_chg(val, unit='%', invert=False):
 
 # ── Weekly data fetch ─────────────────────────────────────────────────────────
 
-def get_weekly_data(india_10y_manual=None, india_10y_prior_manual=None):
+def get_weekly_data():
     """
     Fetch all market data for the weekly snapshot.
-    india_10y_manual       : float — current week close (e.g. 6.87).
-    india_10y_prior_manual : float — prior week close (e.g. 6.91).
-    Both used when yfinance cannot fetch the ticker (always the case now).
     Returns a dict with all values needed by the HTML generator.
     """
     mon, fri = last_completed_week()
@@ -347,11 +331,10 @@ def get_weekly_data(india_10y_manual=None, india_10y_prior_manual=None):
     # ── Yields ──
     us_close = safe_close(cur['us10y'])
     us_prior  = safe_close(prv['us10y'])
-    # yfinance India 10Y tickers are no longer reliable — use Gemini-fetched values
-    in_close  = safe_close(cur['in10y']) or india_10y_manual
-    in_prior  = safe_close(prv['in10y']) or india_10y_prior_manual  # None if unknown → WoW shows N/A
+    in_close  = safe_close(cur['in10y'])
+    in_prior  = safe_close(prv['in10y'])
     us_lo52, us_hi52 = get_52w('^TNX')
-    in_lo52, in_hi52 = get_52w_india_10y(india_10y_manual)
+    in_lo52, in_hi52 = get_52w('GIND10YR=X')
 
     data['us10y_close']   = round(us_close, 2) if us_close else 'N/A'
     data['us10y_wow']     = fmt_chg(bps_change(us_close, us_prior), unit='bps') if us_close else 'N/A'
@@ -387,19 +370,14 @@ def get_weekly_data(india_10y_manual=None, india_10y_prior_manual=None):
     data['brent_5d']       = [round(v, 2) if v else None for v in b_5d]
     data['usdinr_5d']      = [round(v, 2) if v else None for v in u_5d]
 
-    # ── Gold → MCX proxy ──
+    # ── Gold — International spot (COMEX GC=F, USD/oz) ──
     go_close = safe_close(cur['gold'])
     go_prior  = safe_close(prv['gold'])
-    if go_close and u_close:
-        gold_inr = go_close * u_close / 3.11      # USD/oz → INR/10g
-        gold_inr_p = (go_prior * u_prior / 3.11) if go_prior and u_prior else None
-        data['gold_inr']     = f"~₹{round(gold_inr / 1000) * 1000:,.0f}"
-        data['gold_wow']     = fmt_chg(pct_change(gold_inr, gold_inr_p), invert=False) if gold_inr_p else 'N/A'
-        data['gold_wow_val'] = pct_change(gold_inr, gold_inr_p) if gold_inr_p else 0
-    else:
-        data['gold_inr']     = 'N/A'
-        data['gold_wow']     = 'N/A'
-        data['gold_wow_val'] = 0
+    data['gold_usd']     = round(go_close, 0) if go_close else 'N/A'
+    data['gold_wow']     = fmt_chg(pct_change(go_close, go_prior), invert=False) if go_prior else 'N/A'
+    data['gold_wow_val'] = pct_change(go_close, go_prior) if go_prior else 0
+    # Keep legacy key so html_generator fallback doesn't break
+    data['gold_inr']     = data['gold_usd']
 
     # ── Static policy rates ──
     data['fed_rate']  = '3.50–3.75%'   # update manually when Fed changes
@@ -432,10 +410,9 @@ def get_weekly_data(india_10y_manual=None, india_10y_prior_manual=None):
 
 # ── Daily data fetch ──────────────────────────────────────────────────────────
 
-def get_daily_data(india_10y_manual=None):
+def get_daily_data():
     """
     Fetch all market data for the daily snapshot (last 24 hours).
-    india_10y_manual: float — today's India 10Y yield (yfinance unreliable).
     Returns a dict with all values needed by the HTML generator.
     """
     today = datetime.now()
@@ -519,8 +496,8 @@ def get_daily_data(india_10y_manual=None):
 
     us_now  = today_close(cur['us10y'])
     us_prev = yesterday_close(cur['us10y'])
-    in_now  = today_close(cur['in10y']) or india_10y_manual
-    in_prev = yesterday_close(cur['in10y'])   # None if unavailable → chg shows N/A, not false 0
+    in_now  = today_close(cur['in10y'])
+    in_prev = yesterday_close(cur['in10y'])
     data['us10y_close']   = round(us_now, 2) if us_now else 'N/A'
     data['us10y_chg']     = fmt_chg(bps_change(us_now, us_prev), unit='bps') if us_now else 'N/A'
     data['in10y_close']   = round(in_now, 2) if in_now else 'N/A'
@@ -535,13 +512,9 @@ def get_daily_data(india_10y_manual=None):
 
     go_now  = today_close(cur['gold'])
     go_prev = yesterday_close(cur['gold'])
-    if go_now and u_now:
-        gold_inr   = go_now  * u_now  / 3.11
-        gold_inr_p = go_prev * u_prev / 3.11 if go_prev and u_prev else None
-        data['gold_inr'] = f"~₹{round(gold_inr / 1000) * 1000:,.0f}"
-        data['gold_chg'] = fmt_chg(pct_change(gold_inr, gold_inr_p), invert=False)
-    else:
-        data['gold_inr'] = 'N/A'; data['gold_chg'] = 'N/A'
+    data['gold_usd'] = round(go_now, 0) if go_now else 'N/A'
+    data['gold_chg'] = fmt_chg(pct_change(go_now, go_prev), invert=False) if go_prev else 'N/A'
+    data['gold_inr'] = data['gold_usd']   # legacy key
 
     data['fed_rate'] = '3.50–3.75%'
     data['rbi_rate'] = '5.25%'
