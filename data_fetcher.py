@@ -370,14 +370,19 @@ def get_weekly_data():
     data['brent_5d']       = [round(v, 2) if v else None for v in b_5d]
     data['usdinr_5d']      = [round(v, 2) if v else None for v in u_5d]
 
-    # ── Gold — International spot (COMEX GC=F, USD/oz) ──
+    # ── Gold → MCX proxy ──
     go_close = safe_close(cur['gold'])
     go_prior  = safe_close(prv['gold'])
-    data['gold_usd']     = round(go_close, 0) if go_close else 'N/A'
-    data['gold_wow']     = fmt_chg(pct_change(go_close, go_prior), invert=False) if go_prior else 'N/A'
-    data['gold_wow_val'] = pct_change(go_close, go_prior) if go_prior else 0
-    # Keep legacy key so html_generator fallback doesn't break
-    data['gold_inr']     = data['gold_usd']
+    if go_close and u_close:
+        gold_inr = go_close * u_close / 3.11      # USD/oz → INR/10g
+        gold_inr_p = (go_prior * u_prior / 3.11) if go_prior and u_prior else None
+        data['gold_inr']     = f"~₹{round(gold_inr / 1000) * 1000:,.0f}"
+        data['gold_wow']     = fmt_chg(pct_change(gold_inr, gold_inr_p), invert=False) if gold_inr_p else 'N/A'
+        data['gold_wow_val'] = pct_change(gold_inr, gold_inr_p) if gold_inr_p else 0
+    else:
+        data['gold_inr']     = 'N/A'
+        data['gold_wow']     = 'N/A'
+        data['gold_wow_val'] = 0
 
     # ── Static policy rates ──
     data['fed_rate']  = '3.50–3.75%'   # update manually when Fed changes
@@ -512,9 +517,13 @@ def get_daily_data():
 
     go_now  = today_close(cur['gold'])
     go_prev = yesterday_close(cur['gold'])
-    data['gold_usd'] = round(go_now, 0) if go_now else 'N/A'
-    data['gold_chg'] = fmt_chg(pct_change(go_now, go_prev), invert=False) if go_prev else 'N/A'
-    data['gold_inr'] = data['gold_usd']   # legacy key
+    if go_now and u_now:
+        gold_inr   = go_now  * u_now  / 3.11
+        gold_inr_p = go_prev * u_prev / 3.11 if go_prev and u_prev else None
+        data['gold_inr'] = f"~₹{round(gold_inr / 1000) * 1000:,.0f}"
+        data['gold_chg'] = fmt_chg(pct_change(gold_inr, gold_inr_p), invert=False)
+    else:
+        data['gold_inr'] = 'N/A'; data['gold_chg'] = 'N/A'
 
     data['fed_rate'] = '3.50–3.75%'
     data['rbi_rate'] = '5.25%'

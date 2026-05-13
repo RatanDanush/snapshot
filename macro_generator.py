@@ -13,12 +13,8 @@ import google.generativeai as genai
 # ── Model preference (newest first, most likely to have quota) ────────────────
 
 MODEL_PREFERENCE = [
-    # Free-tier models with confirmed quota (as of May 2026 AI Studio limits)
-    'gemini-2.5-flash',        # 5 RPM · 250K TPM · 20 RPD  ← primary
-    'gemini-3.1-flash-lite',   # 15 RPM · 250K TPM · 500 RPD ← best RPD fallback
-    'gemini-3-flash',          # 5 RPM · 250K TPM · 20 RPD
-    'gemini-2.5-flash-lite',   # 10 RPM · 250K TPM · 20 RPD
-    'gemini-2.5-pro',          # 0/0 on free tier — kept for paid keys
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
     'gemini-2.0-flash',
     'gemini-2.0-flash-lite',
     'gemini-1.5-flash',
@@ -100,88 +96,6 @@ def fallback_stories(n=3, reason=''):
              'body': body,
              'inr_relevance': '📌 INR: Update this section with relevant macro context.',
              'links': [], 'color': 'blue'}] * n
-
-
-# ── Data gap filler (Gemini search) ──────────────────────────────────────────
-
-_FIELD_META = {
-    'in10y_close':  ('India 10Y G-Sec yield',    '%'),
-    'us10y_close':  ('US 10Y Treasury yield',     '%'),
-    'brent_close':  ('Brent crude oil price',     'USD/bbl'),
-    'usdinr_close': ('USD/INR spot rate',         ''),
-    'eurinr_close': ('EUR/INR rate',              ''),
-    'gbpinr_close': ('GBP/INR rate',              ''),
-    'jpyinr_close': ('JPY/INR per 100 JPY',       ''),
-    'cnhinr_close': ('CNH/INR rate',              ''),
-    'gold_usd':     ('Gold spot XAUUSD',          'USD/oz'),
-    'dxy_close':    ('DXY Dollar Index',          ''),
-}
-
-def fill_missing_data(api_key, fields_to_fill, date_str):
-    """
-    Search for current values of N/A market data fields via Gemini.
-    Returns (dict {field: float}, error_or_None).
-    """
-    relevant = [f for f in fields_to_fill if f in _FIELD_META]
-    if not relevant:
-        return {}, None
-
-    lines = '\n'.join(
-        f'- {_FIELD_META[f][0]}' + (f' ({_FIELD_META[f][1]})' if _FIELD_META[f][1] else '')
-        for f in relevant
-    )
-    json_keys = ', '.join(f'"{f}": <number or null>' for f in relevant)
-    prompt = (
-        f'Search for latest market values as of {date_str}:\n{lines}\n\n'
-        f'Return ONLY a JSON object with numeric values (no units, no markdown):\n'
-        f'{{{json_keys}}}\n'
-        f'Use null for any genuinely unavailable value.'
-    )
-    text, model, elapsed, err = _call_best(api_key, prompt, use_search=True)
-    if err or not text:
-        return {}, err or 'empty response'
-    result = extract_json(text)
-    if isinstance(result, dict):
-        out = {}
-        for f in relevant:
-            v = result.get(f)
-            try:
-                if v is not None:
-                    out[f] = float(v)
-            except (TypeError, ValueError):
-                pass
-        return out, None
-    return {}, f'JSON parse failed: {(text or "")[:200]}'
-
-
-# ── Per-pair sub-line generator ───────────────────────────────────────────────
-
-def generate_pair_sublines(api_key, pairs, week_str):
-    """
-    Generate terse 1-liner commentary for each FX pair given open/close values.
-    pairs: list of {label, open, close, pct_chg}
-    Returns dict {label: sub_line_str}
-    """
-    if not pairs:
-        return {}
-    pairs_text = '\n'.join(
-        f'- {p["label"]}: open {p["open"]:.4f} → close {p["close"]:.4f}  ({p["pct_chg"]:+.2f}% WoW)'
-        for p in pairs
-    )
-    json_keys = ', '.join(f'"{p["label"]}": "<10-word sub-line>"' for p in pairs)
-    prompt = (
-        f'FX analyst at StanC. Terse MAX 10-word sub-line per pair for {week_str}. '
-        f'Use · separator. Focus on driver + INR implication.\n\n'
-        f'{pairs_text}\n\n'
-        f'Return ONLY valid JSON, no markdown:\n{{{json_keys}}}'
-    )
-    text, _, _, err = _call_best(api_key, prompt, use_search=False)
-    if err or not text:
-        return {}
-    result = extract_json(text)
-    if isinstance(result, dict):
-        return {k: str(v)[:100] for k, v in result.items()}
-    return {}
 
 
 # ── Two-step helpers ──────────────────────────────────────────────────────────

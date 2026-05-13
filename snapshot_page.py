@@ -72,90 +72,7 @@ def render_snapshot_tab():
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
-    # ── Manual Bloomberg / FIMMDA rate override ───────────────────────────────
-    with st.expander("📋 Manual FX & Rate Override (Bloomberg / FIMMDA / CCIL)", expanded=False):
-        st.caption(
-            "Enter rates from Bloomberg / FIMMDA for G3/INR pairs and India 10Y. "
-            "Leave **open = 0** to keep yfinance data. Non-zero open+close overrides yfinance."
-        )
-
-        st.markdown(
-            '<div style="font-size:9px;font-weight:700;color:#3a3a3a;letter-spacing:.1em;'
-            'padding:4px 0;">G3 / INR PAIRS — WEEK OPEN &amp; CLOSE</div>',
-            unsafe_allow_html=True
-        )
-
-        _pairs = [
-            ('eurinr',  'EUR / INR'),
-            ('gbpinr',  'GBP / INR'),
-            ('jpyinr',  'JPY / INR (per 100 JPY)'),
-            ('cnhinr',  'CNH / INR'),
-        ]
-
-        if 'manual_fx' not in st.session_state:
-            st.session_state['manual_fx'] = {}
-
-        cols = st.columns(4)
-        for i, (key, label) in enumerate(_pairs):
-            with cols[i]:
-                st.markdown(f"**{label}**")
-                o_val = st.number_input(
-                    "Week open", key=f"mfx_{key}_open",
-                    min_value=0.0, step=0.01, format="%.4f",
-                    value=float(st.session_state['manual_fx'].get(key, {}).get('open') or 0.0),
-                    label_visibility="visible"
-                )
-                c_val = st.number_input(
-                    "Week close", key=f"mfx_{key}_close",
-                    min_value=0.0, step=0.01, format="%.4f",
-                    value=float(st.session_state['manual_fx'].get(key, {}).get('close') or 0.0),
-                    label_visibility="visible"
-                )
-                if o_val > 0 and c_val > 0:
-                    pct = (c_val - o_val) / o_val * 100
-                    color = "#c0392b" if pct > 0 else "#1a7a1a"
-                    st.markdown(
-                        f'<div style="font-size:10px;font-weight:700;color:{color};">'
-                        f'WoW: {pct:+.2f}%</div>',
-                        unsafe_allow_html=True
-                    )
-                    st.session_state['manual_fx'][key] = {'open': o_val, 'close': c_val}
-                else:
-                    st.session_state['manual_fx'][key] = {'open': None, 'close': None}
-
-        st.markdown(
-            '<div style="font-size:9px;font-weight:700;color:#3a3a3a;letter-spacing:.1em;'
-            'padding:6px 0 2px;">INDIA 10Y G-SEC (CCIL / FIMMDA) — WEEK CLOSE &amp; PRIOR CLOSE</div>',
-            unsafe_allow_html=True
-        )
-        c1, c2 = st.columns(2)
-        with c1:
-            in10y_close_m = st.number_input(
-                "India 10Y — week close (%)", key="mx_in10y_close",
-                min_value=0.0, max_value=20.0, step=0.01, format="%.2f",
-                value=float(st.session_state.get('manual_in10y_close') or 0.0)
-            )
-            st.session_state['manual_in10y_close'] = in10y_close_m if in10y_close_m > 0 else None
-        with c2:
-            in10y_prior_m = st.number_input(
-                "India 10Y — prior week close (%)", key="mx_in10y_prior",
-                min_value=0.0, max_value=20.0, step=0.01, format="%.2f",
-                value=float(st.session_state.get('manual_in10y_prior') or 0.0)
-            )
-            st.session_state['manual_in10y_prior'] = in10y_prior_m if in10y_prior_m > 0 else None
-
-        if in10y_close_m > 0 and in10y_prior_m > 0:
-            bps = round((in10y_close_m - in10y_prior_m) * 100, 1)
-            color = "#c0392b" if bps > 0 else "#1a7a1a"
-            st.markdown(
-                f'<div style="font-size:10px;font-weight:700;color:{color};">'
-                f'WoW: {bps:+.1f} bps</div>',
-                unsafe_allow_html=True
-            )
-
-        st.caption("💡 Tip: after filling, click Generate — these values will override yfinance automatically.")
-
-    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+    # ── Mode selector ─────────────────────────────────────────────────────────
     st.markdown(
         '<div style="font-size:9px;font-weight:700;color:#3a3a3a;'
         'letter-spacing:.12em;padding-bottom:6px;border-bottom:1px solid #181818;'
@@ -207,11 +124,10 @@ def render_snapshot_tab():
     mode = "weekly" if gen_weekly else "daily"
 
     try:
-        from data_fetcher import get_weekly_data, get_daily_data, fmt_chg, pct_change, bps_change
+        from data_fetcher import get_weekly_data, get_daily_data
         from macro_generator import (
             generate_snapshot_commentary,
-            get_weekly_stories, get_week_ahead, get_daily_stories,
-            fill_missing_data, generate_pair_sublines
+            get_weekly_stories, get_week_ahead, get_daily_stories
         )
         from html_generator import generate_weekly_html, generate_daily_html
     except ImportError as e:
@@ -234,125 +150,7 @@ def render_snapshot_tab():
             st.error(f"❌ Market data fetch failed: {e}")
             return
 
-        # ── Step 1.5: Apply manual overrides + N/A fill ───────────────────────
-        # 1a) Apply manual Bloomberg FX rates (overrides yfinance cross-rates)
-        _pair_keys = [('eurinr','EUR/INR'), ('gbpinr','GBP/INR'),
-                      ('jpyinr','JPY/INR (per 100 JPY)'), ('cnhinr','CNH/INR')]
-        manual_fx  = st.session_state.get('manual_fx', {})
-        manual_pairs_for_sublines = []
-
-        for key, label in _pair_keys:
-            fx = manual_fx.get(key, {})
-            o, c = fx.get('open'), fx.get('close')
-            if o and c and o > 0 and c > 0:
-                pct  = round((c - o) / o * 100, 4)
-                data[f'{key}_close']   = round(c, 4)
-                data[f'{key}_wow_val'] = pct
-                data[f'{key}_wow']     = fmt_chg(pct)
-                data[f'{key}_open']    = round(o, 4)
-                manual_pairs_for_sublines.append({'label': label, 'open': o, 'close': c, 'pct_chg': pct})
-
-        # 1b) Apply manual India 10Y (overrides yfinance)
-        in10y_close_m = st.session_state.get('manual_in10y_close')
-        in10y_prior_m = st.session_state.get('manual_in10y_prior')
-        if in10y_close_m:
-            data['in10y_close'] = round(in10y_close_m, 2)
-            if in10y_prior_m:
-                bps_v = bps_change(in10y_close_m, in10y_prior_m)
-                suffix = 'WoW' if mode == 'weekly' else '24h'
-                data['in10y_wow'] = fmt_chg(bps_v, unit='bps') if mode == 'weekly' else fmt_chg(bps_v, unit='bps')
-                data['in10y_wow_val'] = bps_v
-            # Recalc yield spread
-            us_close = data.get('us10y_close')
-            if us_close and us_close != 'N/A':
-                try:
-                    spread = round(float(in10y_close_m) - float(us_close), 2)
-                    data['yield_spread'] = f"{spread:.2f}%"
-                except Exception:
-                    pass
-
-        # 1c) Generate Gemini sub-lines for manually entered pairs
-        if manual_pairs_for_sublines:
-            st.write(f"✍️ **Step 1.5** — Generating sub-lines for {len(manual_pairs_for_sublines)} manually-entered pairs…")
-            week_str = data.get('week_start', '') + '–' + data.get('week_end', data.get('date', ''))
-            sublines = generate_pair_sublines(api_key, manual_pairs_for_sublines, week_str)
-            for key, label in _pair_keys:
-                if label in sublines:
-                    data[f'{key}_sub_manual'] = sublines[label]
-
-        # 1d) Detect remaining N/A fields and try Gemini fill
-        _critical = ['in10y_close', 'us10y_close', 'brent_close', 'usdinr_close',
-                     'eurinr_close', 'gbpinr_close', 'jpyinr_close', 'cnhinr_close',
-                     'dxy_close', 'gold_usd']
-        na_fields = [f for f in _critical if str(data.get(f, 'N/A')) == 'N/A']
-
-        if na_fields:
-            st.write(f"🔍 **Step 1.5** — {len(na_fields)} field(s) are N/A: `{'`, `'.join(na_fields)}`. Asking Gemini…")
-            t_fill = time.time()
-            date_ctx = data.get('week_end') or data.get('date', 'latest available')
-            filled, fill_err = fill_missing_data(api_key, na_fields, date_ctx)
-            elapsed_fill = round(time.time() - t_fill, 1)
-
-            gemini_filled, still_na = [], []
-            for f in na_fields:
-                if f in filled and filled[f] is not None:
-                    data[f] = filled[f]
-                    gemini_filled.append(f'{f}={filled[f]}')
-                else:
-                    still_na.append(f)
-
-            if gemini_filled:
-                st.write(f"✅ Gemini filled: {', '.join(gemini_filled)} ({elapsed_fill}s)")
-            if fill_err:
-                st.markdown(f'<div class="err-box">Gemini fill error: {fill_err}</div>',
-                            unsafe_allow_html=True)
-
-            # 1e) If still N/A after Gemini — prompt user for manual input
-            if still_na:
-                st.warning(
-                    f"⚠️ {len(still_na)} field(s) still N/A after Gemini: "
-                    f"`{'`, `'.join(still_na)}`. Please fill below and click **Generate** again."
-                )
-                _labels = {
-                    'in10y_close':  ('India 10Y G-Sec yield',  '%',    0.01, 20.0),
-                    'us10y_close':  ('US 10Y Treasury yield',   '%',    0.01, 20.0),
-                    'brent_close':  ('Brent crude',             'USD/bbl', 1.0, 300.0),
-                    'usdinr_close': ('USD/INR',                 '',     50.0, 200.0),
-                    'eurinr_close': ('EUR/INR',                 '',     50.0, 200.0),
-                    'gbpinr_close': ('GBP/INR',                 '',     50.0, 200.0),
-                    'jpyinr_close': ('JPY/INR per 100',         '',     30.0, 120.0),
-                    'cnhinr_close': ('CNH/INR',                 '',     8.0,  20.0),
-                    'dxy_close':    ('DXY Dollar Index',        '',     80.0, 130.0),
-                    'gold_usd':     ('Gold USD/oz',             '',     1000.0, 5000.0),
-                }
-                na_cols = st.columns(min(len(still_na), 4))
-                for i, f in enumerate(still_na):
-                    meta = _labels.get(f, (f, '', 0.0, 9999.0))
-                    lbl  = f'{meta[0]} ({meta[1]})' if meta[1] else meta[0]
-                    with na_cols[i % len(na_cols)]:
-                        v = st.number_input(
-                            lbl, key=f'na_fill_{f}',
-                            min_value=float(meta[2]), max_value=float(meta[3]),
-                            step=0.01, format="%.4f", value=0.0
-                        )
-                        if v > 0:
-                            st.session_state[f'na_prefill_{f}'] = v
-
-                # Check if user already pre-filled from a previous run
-                for f in still_na:
-                    prefill = st.session_state.get(f'na_prefill_{f}')
-                    if prefill and prefill > 0:
-                        data[f] = prefill
-
-                # If any are still 0 / N/A, stop and ask user to fill + regenerate
-                truly_missing = [f for f in still_na
-                                 if str(data.get(f, 'N/A')) in ('N/A', '0', '')]
-                if truly_missing:
-                    status.update(
-                        label="⏸ Fill missing data above, then click Generate again",
-                        state="error", expanded=True
-                    )
-                    return
+        # ── Step 2: Commentary ─────────────────────────────────────────────────
         st.write("✍️ **Step 2/5** — Generating commentary (theme bar, per-pair narrative, INR insight)…")
         t2 = time.time()
         commentary, c_err = generate_snapshot_commentary(api_key, data)
@@ -364,12 +162,6 @@ def render_snapshot_tab():
         else:
             n_fields = len([v for v in commentary.values() if v])
             st.write(f"✅ Commentary ready — {n_fields} narrative fields ({elapsed2}s)")
-
-        # Merge manual Gemini sub-lines into commentary (override AI if manually entered)
-        for key, _label in _pair_keys:
-            manual_sub = data.get(f'{key}_sub_manual')
-            if manual_sub:
-                commentary[f'{key.replace("inr","")}inr_sub'] = manual_sub
 
         # ── Step 3: Macro stories ──────────────────────────────────────────────
         st.write("🔍 **Step 3/5** — Macro stories: **Step 3A** searching for news…")
